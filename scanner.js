@@ -1,5 +1,5 @@
 // ============================================
-// iOS EVIDENCE SCANNER - VERSÃO COMPLETA CORRIGIDA
+// iOS EVIDENCE SCANNER - VERSÃO COMPLETA COM DETECTORES APRIMORADOS
 // ============================================
 
 // ============================================
@@ -18,14 +18,16 @@ class ConfigManager {
             maxCacheSize: 100,
             timeout: 30000,
             confidenceThresholds: {
-                high: 0.8,
-                medium: 0.5,
-                low: 0.3
+                critical: 4,
+                high: 3,
+                medium: 2,
+                low: 1
             },
             scoreWeights: {
-                high: 30,
-                medium: 15,
-                low: 5
+                critical: 100,
+                high: 50,
+                medium: 25,
+                low: 10
             }
         };
     }
@@ -190,7 +192,7 @@ class CacheManager {
 }
 
 // ============================================
-// 6. SCRIPTABLE FILE LOADER - CORRIGIDO
+// 6. SCRIPTABLE FILE LOADER
 // ============================================
 
 class ScriptableFileLoader {
@@ -203,16 +205,11 @@ class ScriptableFileLoader {
         this.fileInfo = [];
     }
 
-    /**
-     * Método principal para selecionar arquivos
-     */
     async selectFiles(allowMultiple = true) {
         try {
             Logger.info('Abrindo seletor de arquivos...');
             
-            // Método 1: Tentar usar o seletor nativo do iOS
             try {
-                // Tenta usar o DocumentPicker diretamente
                 if (typeof DocumentPicker !== 'undefined') {
                     try {
                         const result = await DocumentPicker.open();
@@ -235,7 +232,6 @@ class ScriptableFileLoader {
                 Logger.warn(`DocumentPicker não disponível: ${e.message}`);
             }
 
-            // Método 2: Usar iCloud Drive (fallback principal)
             return await this.selectFilesFromiCloud(allowMultiple);
 
         } catch (error) {
@@ -244,18 +240,13 @@ class ScriptableFileLoader {
         }
     }
 
-    /**
-     * Seleção via iCloud Drive
-     */
     async selectFilesFromiCloud(allowMultiple = true) {
         try {
             const fm = FileManager.iCloud();
             const docs = fm.documentsDirectory();
             
-            // Lista arquivos na pasta do Scriptable
             const items = fm.listContents(docs);
             
-            // Filtra apenas arquivos suportados
             const supportedItems = items.filter(item => {
                 const ext = this.getFileExtension(item);
                 return this.supportedExtensions.includes(ext);
@@ -264,13 +255,12 @@ class ScriptableFileLoader {
             if (supportedItems.length === 0) {
                 const alert = new Alert();
                 alert.title = 'ℹ️ Nenhum arquivo encontrado';
-                alert.message = `Nenhum arquivo suportado encontrado na pasta do Scriptable.\n\nFormatos aceitos:\n${this.supportedExtensions.join(', ')}\n\nColoque os arquivos em:\niCloud Drive → Scriptable\n\nOu use AirDrop para enviar.`;
+                alert.message = `Nenhum arquivo suportado encontrado na pasta do Scriptable.\n\nFormatos aceitos:\n${this.supportedExtensions.join(', ')}\n\nColoque os arquivos em:\niCloud Drive → Scriptable`;
                 alert.addAction('OK');
                 await alert.presentAlert();
                 return [];
             }
 
-            // Cria tabela de seleção
             const selection = new UITable();
             selection.title = '📂 Selecione o(s) arquivo(s) para análise';
             
@@ -280,7 +270,6 @@ class ScriptableFileLoader {
                 const ext = this.getFileExtension(item);
                 const icon = this.getFileIcon(ext);
                 
-                // Obtém informações do arquivo
                 let fileSize = 0;
                 try {
                     const content = fm.readString(path);
@@ -289,9 +278,7 @@ class ScriptableFileLoader {
                     try {
                         const data = fm.read(path);
                         fileSize = data ? data.length : 0;
-                    } catch (e2) {
-                        Logger.warn(`Não foi possível ler informações de ${item}`);
-                    }
+                    } catch (e2) {}
                 }
                 
                 const row = new UITableRow(`${icon} ${item}`);
@@ -306,7 +293,6 @@ class ScriptableFileLoader {
                 selection.addRow(row);
             }
 
-            // Botão de selecionar todos (se múltiplo)
             if (allowMultiple) {
                 selection.addAction('📂 Selecionar Todos', (table) => {
                     for (const row of table.rows) {
@@ -315,7 +301,6 @@ class ScriptableFileLoader {
                 });
             }
             
-            // Botão principal de análise
             selection.addAction('📊 Analisar Selecionados', async (table) => {
                 const selectedRows = table.selectedRows;
                 if (selectedRows.length === 0) {
@@ -340,7 +325,7 @@ class ScriptableFileLoader {
                                 size: content.length,
                                 modified: new Date(),
                                 content: content,
-                                type: this.detectFileType({ name: fileInfo.item, extension: this.getFileExtension(fileInfo.item) })
+                                type: this.detectFileType({ name: fileInfo.item })
                             });
                         }
                     } catch (error) {
@@ -357,13 +342,11 @@ class ScriptableFileLoader {
 
             const result = await selection.present();
             
-            // Se o resultado for um array de arquivos, retorna
             if (Array.isArray(result) && result.length > 0) {
                 this.selectedFiles = result;
                 return result;
             }
             
-            // Se não veio resultado, tenta pegar da seleção manual
             const selectedRows = selection.selectedRows;
             if (selectedRows && selectedRows.length > 0) {
                 const files = [];
@@ -379,7 +362,7 @@ class ScriptableFileLoader {
                                 size: content.length,
                                 modified: new Date(),
                                 content: content,
-                                type: this.detectFileType({ name: fileInfo.item, extension: this.getFileExtension(fileInfo.item) })
+                                type: this.detectFileType({ name: fileInfo.item })
                             });
                         }
                     } catch (error) {
@@ -405,9 +388,6 @@ class ScriptableFileLoader {
         }
     }
 
-    /**
-     * Carrega um arquivo a partir de um caminho
-     */
     async loadFileFromPath(path) {
         try {
             const fm = FileManager.iCloud();
@@ -444,9 +424,6 @@ class ScriptableFileLoader {
         }
     }
 
-    /**
-     * Carrega um arquivo individual
-     */
     async loadFile(file) {
         try {
             const fm = FileManager.iCloud();
@@ -501,9 +478,6 @@ class ScriptableFileLoader {
         }
     }
 
-    /**
-     * Valida o arquivo
-     */
     validateFile(file) {
         if (!file) return { valid: false, error: 'Arquivo inválido' };
         if (!file.name && !file.path) return { valid: false, error: 'Nome do arquivo não especificado' };
@@ -529,9 +503,6 @@ class ScriptableFileLoader {
         return { valid: true };
     }
 
-    /**
-     * Detecta o tipo do arquivo
-     */
     detectFileType(file) {
         const ext = file.extension || this.getFileExtension(file.name || '');
         const typeMap = {
@@ -800,6 +771,8 @@ class AdvancedParser {
         if (str.includes('certificate') || str.includes('trust')) return 'Certificate';
         if (str.includes('developer') || str.includes('xcode')) return 'Development';
         if (str.includes('crash') || str.includes('exception')) return 'Crash';
+        if (str.includes('frida') || str.includes('hook') || str.includes('inject')) return 'Hook';
+        if (str.includes('altstore') || str.includes('trollstore') || str.includes('sideload')) return 'Sideload';
         return 'System';
     }
 
@@ -884,123 +857,635 @@ class DetectorManager {
 }
 
 // ============================================
-// 10. ENHANCED DETECTORS
+// 10. ADVANCED DETECTORS
 // ============================================
 
-class EnhancedVPNDetector extends BaseDetector {
+// 10.1 ADVANCED PROXY DETECTOR
+class AdvancedProxyDetector extends BaseDetector {
     constructor() {
-        super('Enhanced VPN Detector');
+        super('Advanced Proxy Detector');
         this.patterns = {
-            process: ['packettunnel', 'networkextension', 'vpn', 'wireguard', 'openvpn', 'ikev2'],
-            files: ['vpn.conf', 'wg.conf', 'ovpn', 'vpn.log'],
-            bundleIds: ['com.wireguard', 'com.openvpn', 'com.apple.networkextension']
+            apps: ['mitmproxy', 'charles', 'burp', 'fiddler', 'proxyman', 'http catcher', 'surge', 'quantumult', 'shadowrocket', 'potatso', 'loon'],
+            configFiles: ['proxy.pac', 'proxy.conf', 'proxy.config', 'mitmproxy', 'charles.log', 'burp.log', 'proxyman.log', 'surge.conf', 'quantumult.conf', 'shadowrocket.conf'],
+            bundleIds: ['com.charles.proxy', 'com.burp', 'com.proxyman', 'com.surge', 'com.quantumult', 'com.shadowrocket'],
+            networkPatterns: ['proxy', 'mitm', 'intercept', 'ssl interception', 'certificate pinning', 'ssl proxy', 'http proxy', 'socks proxy', 'proxy settings', 'proxy configuration'],
+            ports: ['8080', '8888', '8090', '3128', '8081', '8889'],
+            certPatterns: ['mitm certificate', 'portswigger ca', 'charles ca', 'burp ca', 'proxyman ca', 'self-signed certificate', 'proxy certificate', 'intercepting certificate']
         };
     }
 
     detect(events) {
         const results = [];
+        let proxyIndicators = [];
+
         for (const event of events) {
             const str = JSON.stringify(event).toLowerCase();
-            for (const pattern of this.patterns.process) {
-                if (str.includes(pattern)) {
-                    results.push(this.createResult('VPN', event, 'high'));
-                    break;
+            let found = false;
+            let details = [];
+
+            for (const app of this.patterns.apps) {
+                if (str.includes(app.toLowerCase())) {
+                    details.push(`Aplicativo de proxy: ${app}`);
+                    found = true;
+                    proxyIndicators.push({ type: 'app', value: app, event: event });
                 }
             }
+
+            for (const config of this.patterns.configFiles) {
+                if (str.includes(config.toLowerCase())) {
+                    details.push(`Configuração de proxy: ${config}`);
+                    found = true;
+                    proxyIndicators.push({ type: 'config', value: config, event: event });
+                }
+            }
+
             for (const bundleId of this.patterns.bundleIds) {
                 if (str.includes(bundleId.toLowerCase())) {
-                    results.push(this.createResult('VPN Bundle', event, 'high'));
-                    break;
+                    details.push(`Bundle ID de proxy: ${bundleId}`);
+                    found = true;
+                    proxyIndicators.push({ type: 'bundle', value: bundleId, event: event });
                 }
             }
+
+            for (const pattern of this.patterns.networkPatterns) {
+                if (str.includes(pattern.toLowerCase())) {
+                    details.push(`Padrão de rede: ${pattern}`);
+                    found = true;
+                    proxyIndicators.push({ type: 'network', value: pattern, event: event });
+                }
+            }
+
+            for (const port of this.patterns.ports) {
+                if (str.includes(`:${port}`) || str.includes(`port ${port}`)) {
+                    details.push(`Porta de proxy: ${port}`);
+                    found = true;
+                    proxyIndicators.push({ type: 'port', value: port, event: event });
+                }
+            }
+
+            for (const cert of this.patterns.certPatterns) {
+                if (str.includes(cert.toLowerCase())) {
+                    details.push(`Certificado MITM: ${cert}`);
+                    found = true;
+                    proxyIndicators.push({ type: 'certificate', value: cert, event: event });
+                }
+            }
+
+            if (event.category === 'Log' || event.type === 'log') {
+                if (str.includes('proxy') || str.includes('mitm') || str.includes('intercept')) {
+                    details.push(`Log com evidência de proxy`);
+                    found = true;
+                    proxyIndicators.push({ type: 'log', value: event.description, event: event });
+                }
+            }
+
+            if (found && details.length > 0) {
+                results.push(this.createResult(
+                    'Proxy Evidence',
+                    {
+                        source: event.source || 'arquivo',
+                        timestamp: event.timestamp,
+                        details: details.join('; '),
+                        event: event
+                    },
+                    details.length >= 3 ? 'high' : 'medium'
+                ));
+            }
         }
+
+        if (proxyIndicators.length >= 3) {
+            const uniqueTypes = new Set(proxyIndicators.map(i => i.type));
+            if (uniqueTypes.size >= 2) {
+                results.push({
+                    detector: this.name,
+                    type: 'Multiple Proxy Indicators',
+                    evidence: proxyIndicators,
+                    confidence: 'high',
+                    timestamp: new Date(),
+                    explanation: `Múltiplos indicadores de proxy detectados (${proxyIndicators.length} evidências)`
+                });
+            }
+        }
+
         return results;
     }
 }
 
-class EnhancedProxyDetector extends BaseDetector {
+// 10.2 ADVANCED VPN DETECTOR
+class AdvancedVPNDetector extends BaseDetector {
     constructor() {
-        super('Enhanced Proxy Detector');
+        super('Advanced VPN Detector');
         this.patterns = {
-            apps: ['mitmproxy', 'charles', 'burp', 'fiddler', 'proxyman', 'http catcher'],
-            files: ['proxy.pac', 'proxy.conf', 'mitmproxy', 'charles.log'],
-            bundleIds: ['com.xx', 'com.charles', 'com.burp'],
-            network: ['proxy', 'mitm', 'intercept', 'ssl', 'certificate']
+            apps: ['wireguard', 'openvpn', 'ikev2', 'l2tp', 'pptp', 'ipsec'],
+            configFiles: ['vpn.conf', 'wg.conf', 'ovpn', 'openvpn.conf', 'ikev2.conf'],
+            bundleIds: ['com.wireguard', 'com.openvpn', 'com.apple.networkextension'],
+            processes: ['packettunnel', 'networkextension', 'vpn', 'wireguard', 'openvpn', 'iked'],
+            networkPatterns: ['vpn', 'tunnel', 'encrypted tunnel', 'vpn connection', 'ppp', 'l2tp', 'ipsec', 'ikev2', 'wireguard']
         };
     }
 
     detect(events) {
         const results = [];
+        let vpnIndicators = [];
+
         for (const event of events) {
             const str = JSON.stringify(event).toLowerCase();
+            let found = false;
+
             for (const app of this.patterns.apps) {
                 if (str.includes(app.toLowerCase())) {
-                    results.push(this.createResult('Proxy App', event, 'high'));
-                    break;
+                    results.push(this.createResult('VPN App', {
+                        source: event.source,
+                        timestamp: event.timestamp,
+                        app: app
+                    }, 'high'));
+                    found = true;
+                    vpnIndicators.push({ type: 'app', value: app });
                 }
             }
+
+            for (const config of this.patterns.configFiles) {
+                if (str.includes(config.toLowerCase())) {
+                    results.push(this.createResult('VPN Config', {
+                        source: event.source,
+                        timestamp: event.timestamp,
+                        config: config
+                    }, 'high'));
+                    found = true;
+                    vpnIndicators.push({ type: 'config', value: config });
+                }
+            }
+
+            for (const process of this.patterns.processes) {
+                if (str.includes(process.toLowerCase())) {
+                    results.push(this.createResult('VPN Process', {
+                        source: event.source,
+                        timestamp: event.timestamp,
+                        process: process
+                    }, 'high'));
+                    found = true;
+                    vpnIndicators.push({ type: 'process', value: process });
+                }
+            }
+
+            if (event.category === 'Network' || event.type === 'network') {
+                for (const pattern of this.patterns.networkPatterns) {
+                    if (str.includes(pattern.toLowerCase())) {
+                        results.push(this.createResult('VPN Network', {
+                            source: event.source,
+                            timestamp: event.timestamp,
+                            pattern: pattern
+                        }, 'medium'));
+                        found = true;
+                        vpnIndicators.push({ type: 'network', value: pattern });
+                    }
+                }
+            }
+
+            if (str.includes('networkextension') || str.includes('packettunnel')) {
+                results.push(this.createResult('VPN NetworkExtension', {
+                    source: event.source,
+                    timestamp: event.timestamp,
+                    details: 'NetworkExtension detectado'
+                }, 'high'));
+                vpnIndicators.push({ type: 'ios_vpn', value: 'NetworkExtension' });
+            }
+        }
+
+        if (vpnIndicators.length >= 2) {
+            results.push({
+                detector: this.name,
+                type: 'Multiple VPN Indicators',
+                evidence: vpnIndicators,
+                confidence: 'high',
+                timestamp: new Date(),
+                explanation: `${vpnIndicators.length} indicadores de VPN detectados`
+            });
+        }
+
+        return results;
+    }
+}
+
+// 10.3 ADVANCED JAILBREAK DETECTOR
+class AdvancedJailbreakDetector extends BaseDetector {
+    constructor() {
+        super('Advanced Jailbreak Detector');
+        this.patterns = {
+            apps: ['cydia', 'sileo', 'zebra', 'procursus', 'ellekit', 'substitute', 'substrate'],
+            files: ['cydia.log', 'jailbreak.plist', 'procursus', 'substrate', 'mobile_substrate'],
+            bundleIds: ['com.saurik.cydia', 'org.coolstar.sileo', 'com.zebra'],
+            processes: ['jailbreakd', 'substituted', 'cydia', 'sileo', 'zebra', 'ellekit'],
+            paths: ['/var/jb/', '/jb/', '/.jailbreak', '/var/lib/cydia'],
+            systemFiles: ['/.cydia_', '/.sileo_', '/.procursus_']
+        };
+    }
+
+    detect(events) {
+        const results = [];
+        let jbIndicators = [];
+
+        for (const event of events) {
+            const str = JSON.stringify(event).toLowerCase();
+            let found = false;
+
+            for (const app of this.patterns.apps) {
+                if (str.includes(app.toLowerCase())) {
+                    results.push(this.createResult('Jailbreak App', {
+                        source: event.source,
+                        timestamp: event.timestamp,
+                        app: app
+                    }, 'critical'));
+                    found = true;
+                    jbIndicators.push({ type: 'app', value: app });
+                }
+            }
+
             for (const file of this.patterns.files) {
                 if (str.includes(file.toLowerCase())) {
-                    results.push(this.createResult('Proxy File', event, 'medium'));
-                    break;
+                    results.push(this.createResult('Jailbreak File', {
+                        source: event.source,
+                        timestamp: event.timestamp,
+                        file: file
+                    }, 'critical'));
+                    found = true;
+                    jbIndicators.push({ type: 'file', value: file });
                 }
             }
-            if (event.category === 'Network' || event.type === 'network') {
-                for (const pattern of this.patterns.network) {
-                    if (str.includes(pattern)) {
-                        results.push(this.createResult('Proxy Network', event, 'medium'));
-                        break;
+
+            for (const process of this.patterns.processes) {
+                if (str.includes(process.toLowerCase())) {
+                    results.push(this.createResult('Jailbreak Process', {
+                        source: event.source,
+                        timestamp: event.timestamp,
+                        process: process
+                    }, 'critical'));
+                    found = true;
+                    jbIndicators.push({ type: 'process', value: process });
+                }
+            }
+
+            for (const path of this.patterns.paths) {
+                if (str.includes(path.toLowerCase())) {
+                    results.push(this.createResult('Jailbreak Path', {
+                        source: event.source,
+                        timestamp: event.timestamp,
+                        path: path
+                    }, 'critical'));
+                    found = true;
+                    jbIndicators.push({ type: 'path', value: path });
+                }
+            }
+
+            for (const sysFile of this.patterns.systemFiles) {
+                if (str.includes(sysFile.toLowerCase())) {
+                    results.push(this.createResult('Jailbreak System File', {
+                        source: event.source,
+                        timestamp: event.timestamp,
+                        file: sysFile
+                    }, 'critical'));
+                    found = true;
+                    jbIndicators.push({ type: 'system_file', value: sysFile });
+                }
+            }
+        }
+
+        if (jbIndicators.length >= 2) {
+            results.push({
+                detector: this.name,
+                type: 'Multiple Jailbreak Indicators',
+                evidence: jbIndicators,
+                confidence: 'critical',
+                timestamp: new Date(),
+                explanation: `${jbIndicators.length} indicadores de jailbreak detectados`
+            });
+        }
+
+        return results;
+    }
+}
+
+// 10.4 ADVANCED SIDELOAD DETECTOR
+class AdvancedSideloadDetector extends BaseDetector {
+    constructor() {
+        super('Advanced Sideload Detector');
+        this.patterns = {
+            apps: ['altstore', 'trollstore', 'sidestore', 'scarlet', 'esign', 'feather', 'sideloadly'],
+            files: ['altstore.plist', 'trollstore', 'provisioning', 'mobileprovision'],
+            bundleIds: ['com.altstore', 'com.opa334.trollstore', 'com.sidestore'],
+            processes: ['altstore', 'trollstore', 'sidestore', 'sideloadly'],
+            patterns: ['provisioning profile', 'adhoc', 'enterprise certificate', 'sideload']
+        };
+    }
+
+    detect(events) {
+        const results = [];
+        let sideloadIndicators = [];
+
+        for (const event of events) {
+            const str = JSON.stringify(event).toLowerCase();
+            let found = false;
+
+            for (const app of this.patterns.apps) {
+                if (str.includes(app.toLowerCase())) {
+                    results.push(this.createResult('Sideload App', {
+                        source: event.source,
+                        timestamp: event.timestamp,
+                        app: app
+                    }, 'high'));
+                    found = true;
+                    sideloadIndicators.push({ type: 'app', value: app });
+                }
+            }
+
+            for (const file of this.patterns.files) {
+                if (str.includes(file.toLowerCase())) {
+                    results.push(this.createResult('Sideload File', {
+                        source: event.source,
+                        timestamp: event.timestamp,
+                        file: file
+                    }, 'high'));
+                    found = true;
+                    sideloadIndicators.push({ type: 'file', value: file });
+                }
+            }
+
+            for (const pattern of this.patterns.patterns) {
+                if (str.includes(pattern.toLowerCase())) {
+                    results.push(this.createResult('Sideload Pattern', {
+                        source: event.source,
+                        timestamp: event.timestamp,
+                        pattern: pattern
+                    }, 'medium'));
+                    found = true;
+                    sideloadIndicators.push({ type: 'pattern', value: pattern });
+                }
+            }
+        }
+
+        if (sideloadIndicators.length >= 2) {
+            results.push({
+                detector: this.name,
+                type: 'Multiple Sideload Indicators',
+                evidence: sideloadIndicators,
+                confidence: 'high',
+                timestamp: new Date(),
+                explanation: `${sideloadIndicators.length} indicadores de sideload detectados`
+            });
+        }
+
+        return results;
+    }
+}
+
+// 10.5 ADVANCED HOOK DETECTOR
+class AdvancedHookDetector extends BaseDetector {
+    constructor() {
+        super('Advanced Hook Detector');
+        this.patterns = {
+            tools: ['frida', 'cycript', 'gdb', 'lldb', 'fishhook', 'substrate'],
+            files: ['frida.log', 'frida.json', '.frida', 'cycript.js'],
+            processes: ['frida-server', 'frida-gadget', 'cycript', 'gdb'],
+            patterns: ['interpose', 'hook', 'inject', 'dylib injection', 'frida-agent'],
+            bundleIds: ['re.frida', 'com.frida']
+        };
+    }
+
+    detect(events) {
+        const results = [];
+
+        for (const event of events) {
+            const str = JSON.stringify(event).toLowerCase();
+            let found = false;
+
+            for (const tool of this.patterns.tools) {
+                if (str.includes(tool.toLowerCase())) {
+                    results.push(this.createResult('Hook Tool', {
+                        source: event.source,
+                        timestamp: event.timestamp,
+                        tool: tool
+                    }, 'critical'));
+                    found = true;
+                }
+            }
+
+            for (const file of this.patterns.files) {
+                if (str.includes(file.toLowerCase())) {
+                    results.push(this.createResult('Hook File', {
+                        source: event.source,
+                        timestamp: event.timestamp,
+                        file: file
+                    }, 'critical'));
+                    found = true;
+                }
+            }
+
+            for (const process of this.patterns.processes) {
+                if (str.includes(process.toLowerCase())) {
+                    results.push(this.createResult('Hook Process', {
+                        source: event.source,
+                        timestamp: event.timestamp,
+                        process: process
+                    }, 'critical'));
+                    found = true;
+                }
+            }
+
+            for (const pattern of this.patterns.patterns) {
+                if (str.includes(pattern.toLowerCase())) {
+                    results.push(this.createResult('Hook Pattern', {
+                        source: event.source,
+                        timestamp: event.timestamp,
+                        pattern: pattern
+                    }, 'high'));
+                    found = true;
+                }
+            }
+        }
+
+        return results;
+    }
+}
+
+// 10.6 ADVANCED FREE FIRE DETECTOR
+class AdvancedFreeFireDetector extends BaseDetector {
+    constructor() {
+        super('Advanced Free Fire Detector');
+        this.patterns = {
+            bundleIds: ['com.garena.game.ff', 'com.garena.game.freefire', 'com.garena.game.freefirebr'],
+            processes: ['freefire', 'garena', 'ff'],
+            files: ['freefire.log', 'ff_', 'garena.log'],
+            patterns: ['free fire', 'garena', 'ff', 'battle royale'],
+            crashPatterns: ['freefire crash', 'ff crash', 'garena crash'],
+            analytics: ['freefire_analytics', 'ff_analytics']
+        };
+    }
+
+    detect(events) {
+        const results = [];
+        let ffEvents = [];
+
+        for (const event of events) {
+            const str = JSON.stringify(event).toLowerCase();
+            let found = false;
+
+            for (const bundleId of this.patterns.bundleIds) {
+                if (str.includes(bundleId.toLowerCase())) {
+                    results.push(this.createResult('Free Fire Bundle', {
+                        source: event.source,
+                        timestamp: event.timestamp,
+                        bundleId: bundleId
+                    }, 'high'));
+                    found = true;
+                    ffEvents.push({ type: 'bundle', value: bundleId });
+                }
+            }
+
+            for (const process of this.patterns.processes) {
+                if (str.includes(process.toLowerCase())) {
+                    results.push(this.createResult('Free Fire Process', {
+                        source: event.source,
+                        timestamp: event.timestamp,
+                        process: process
+                    }, 'high'));
+                    found = true;
+                    ffEvents.push({ type: 'process', value: process });
+                }
+            }
+
+            for (const file of this.patterns.files) {
+                if (str.includes(file.toLowerCase())) {
+                    results.push(this.createResult('Free Fire File', {
+                        source: event.source,
+                        timestamp: event.timestamp,
+                        file: file
+                    }, 'medium'));
+                    found = true;
+                    ffEvents.push({ type: 'file', value: file });
+                }
+            }
+
+            for (const pattern of this.patterns.patterns) {
+                if (str.includes(pattern.toLowerCase())) {
+                    results.push(this.createResult('Free Fire Pattern', {
+                        source: event.source,
+                        timestamp: event.timestamp,
+                        pattern: pattern
+                    }, 'medium'));
+                    found = true;
+                    ffEvents.push({ type: 'pattern', value: pattern });
+                }
+            }
+
+            if (event.category === 'Crash' || event.type === 'crash') {
+                for (const crash of this.patterns.crashPatterns) {
+                    if (str.includes(crash.toLowerCase())) {
+                        results.push(this.createResult('Free Fire Crash', {
+                            source: event.source,
+                            timestamp: event.timestamp,
+                            crash: crash
+                        }, 'high'));
+                        found = true;
+                        ffEvents.push({ type: 'crash', value: crash });
                     }
                 }
             }
         }
+
+        if (ffEvents.length >= 3) {
+            results.push({
+                detector: this.name,
+                type: 'Multiple Free Fire Activities',
+                evidence: ffEvents,
+                confidence: 'high',
+                timestamp: new Date(),
+                explanation: `${ffEvents.length} eventos relacionados ao Free Fire detectados`
+            });
+        }
+
         return results;
     }
 }
 
-class EnhancedJailbreakDetector extends BaseDetector {
+// 10.7 ADVANCED CERTIFICATE DETECTOR
+class AdvancedCertificateDetector extends BaseDetector {
     constructor() {
-        super('Enhanced Jailbreak Detector');
+        super('Advanced Certificate Detector');
         this.patterns = {
-            apps: ['cydia', 'sileo', 'zebra', 'procursus', 'ellekit', 'substitute', 'substrate'],
-            files: ['cydia.log', 'jailbreak.plist', 'procursus', 'substrate'],
-            bundleIds: ['com.saurik.cydia', 'org.coolstar.sileo', 'com.zebra'],
-            processes: ['jailbreakd', 'substituted', 'cydia', 'sileo']
+            types: ['certificate', 'trust', 'ssl', 'tls', 'ca', 'root ca'],
+            mitmCerts: ['portswigger ca', 'charles ca', 'burp ca', 'mitmproxy ca', 'proxyman ca'],
+            enterpriseCerts: ['enterprise certificate', 'in-house certificate', 'distribution certificate'],
+            files: ['certificate.pem', 'certificate.crt', 'truststore', 'ca.crt'],
+            patterns: ['self-signed', 'certificate pinning', 'ssl inspection']
         };
     }
 
     detect(events) {
         const results = [];
+
         for (const event of events) {
             const str = JSON.stringify(event).toLowerCase();
-            for (const app of this.patterns.apps) {
-                if (str.includes(app.toLowerCase())) {
-                    results.push(this.createResult('Jailbreak App', event, 'high'));
-                    break;
+
+            for (const cert of this.patterns.mitmCerts) {
+                if (str.includes(cert.toLowerCase())) {
+                    results.push(this.createResult('MITM Certificate', {
+                        source: event.source,
+                        timestamp: event.timestamp,
+                        certificate: cert
+                    }, 'critical'));
                 }
             }
+
+            for (const cert of this.patterns.enterpriseCerts) {
+                if (str.includes(cert.toLowerCase())) {
+                    results.push(this.createResult('Enterprise Certificate', {
+                        source: event.source,
+                        timestamp: event.timestamp,
+                        certificate: cert
+                    }, 'high'));
+                }
+            }
+
             for (const file of this.patterns.files) {
                 if (str.includes(file.toLowerCase())) {
-                    results.push(this.createResult('Jailbreak File', event, 'high'));
-                    break;
+                    results.push(this.createResult('Certificate File', {
+                        source: event.source,
+                        timestamp: event.timestamp,
+                        file: file
+                    }, 'medium'));
+                }
+            }
+
+            if (event.category === 'Network' || event.type === 'network') {
+                for (const pattern of this.patterns.patterns) {
+                    if (str.includes(pattern.toLowerCase())) {
+                        results.push(this.createResult('SSL Pattern', {
+                            source: event.source,
+                            timestamp: event.timestamp,
+                            pattern: pattern
+                        }, 'medium'));
+                    }
                 }
             }
         }
+
         return results;
     }
 }
 
 // ============================================
-// 11. CORRELATION ENGINE
+// 11. ENHANCED CORRELATION ENGINE
 // ============================================
 
-class CorrelationEngine {
+class EnhancedCorrelationEngine {
     constructor() {
         this.rules = [
-            this.correlateProxyAndApp,
-            this.correlateVPNAndNetwork,
-            this.correlateTiming,
-            this.correlateCrashPatterns
+            this.correlateProxyAndCertificate.bind(this),
+            this.correlateSideloadAndFreeFire.bind(this),
+            this.correlateMultipleTools.bind(this),
+            this.correlateVPNAndNetwork.bind(this),
+            this.correlateTiming.bind(this),
+            this.correlateCrashPatterns.bind(this)
         ];
     }
 
@@ -1019,22 +1504,69 @@ class CorrelationEngine {
         return correlations;
     }
 
-    correlateProxyAndApp(events) {
+    correlateProxyAndCertificate(events) {
         const correlations = [];
-        const proxyEvents = events.filter(e => e.category === 'Proxy');
-        const appEvents = events.filter(e => e.category === 'FreeFire' || e.category === 'AppStore');
+        const proxyEvents = events.filter(e => e.category === 'Proxy' || e.type === 'Proxy Evidence');
+        const certEvents = events.filter(e => e.category === 'Certificate' || e.type === 'MITM Certificate');
+
         for (const proxy of proxyEvents) {
-            for (const app of appEvents) {
-                if (this.isTimeClose(proxy.timestamp, app.timestamp, 5)) {
+            for (const cert of certEvents) {
+                if (this.isTimeClose(proxy.timestamp, cert.timestamp, 10)) {
                     correlations.push({
                         id: `corr_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-                        type: 'proxy_app_usage',
-                        description: `Proxy ativo próximo ao uso do aplicativo ${app.type}`,
-                        confidence: 'high',
-                        events: [proxy, app],
-                        timestamp: proxy.timestamp
+                        type: 'proxy_mitm_certificate',
+                        description: 'Proxy e certificado MITM detectados próximos no tempo',
+                        confidence: 'critical',
+                        events: [proxy, cert],
+                        timestamp: proxy.timestamp,
+                        explanation: 'Proxy ativo com certificado MITM - indica interceptação de tráfego'
                     });
                 }
+            }
+        }
+        return correlations;
+    }
+
+    correlateSideloadAndFreeFire(events) {
+        const correlations = [];
+        const sideloadEvents = events.filter(e => e.type === 'Sideload App' || e.type === 'Sideload Pattern');
+        const ffEvents = events.filter(e => e.category === 'FreeFire' || e.type === 'Free Fire Bundle');
+
+        for (const sideload of sideloadEvents) {
+            for (const ff of ffEvents) {
+                if (this.isTimeClose(sideload.timestamp, ff.timestamp, 30)) {
+                    correlations.push({
+                        id: `corr_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+                        type: 'sideload_freefire_cheat',
+                        description: 'Sideload detectado com atividade do Free Fire',
+                        confidence: 'high',
+                        events: [sideload, ff],
+                        timestamp: ff.timestamp,
+                        explanation: 'Aplicativo sideload detectado junto com uso do Free Fire - possível modificação do jogo'
+                    });
+                }
+            }
+        }
+        return correlations;
+    }
+
+    correlateMultipleTools(events) {
+        const correlations = [];
+        const toolCategories = ['Proxy', 'VPN', 'Jailbreak', 'Hook', 'Sideload'];
+        const tools = events.filter(e => toolCategories.includes(e.category));
+
+        if (tools.length >= 3) {
+            const uniqueTypes = new Set(tools.map(e => e.category));
+            if (uniqueTypes.size >= 2) {
+                correlations.push({
+                    id: `corr_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+                    type: 'multiple_suspicious_tools',
+                    description: `${tools.length} ferramentas suspeitas detectadas (${Array.from(uniqueTypes).join(', ')})`,
+                    confidence: 'high',
+                    events: tools,
+                    timestamp: tools[0].timestamp,
+                    explanation: 'Múltiplas ferramentas suspeitas detectadas - ambiente comprometido'
+                });
             }
         }
         return correlations;
@@ -1044,6 +1576,7 @@ class CorrelationEngine {
         const correlations = [];
         const vpnEvents = events.filter(e => e.category === 'VPN');
         const networkEvents = events.filter(e => e.category === 'Network' || e.type === 'network');
+        
         for (const vpn of vpnEvents) {
             for (const network of networkEvents) {
                 if (this.isTimeClose(vpn.timestamp, network.timestamp, 10)) {
@@ -1064,12 +1597,14 @@ class CorrelationEngine {
     correlateTiming(events) {
         const correlations = [];
         const sortedEvents = events.filter(e => e.timestamp).sort((a, b) => a.timestamp - b.timestamp);
+        
         for (let i = 0; i < sortedEvents.length - 2; i++) {
             const e1 = sortedEvents[i];
             const e2 = sortedEvents[i + 1];
             const e3 = sortedEvents[i + 2];
             const diff1 = e2.timestamp - e1.timestamp;
             const diff2 = e3.timestamp - e2.timestamp;
+            
             if (diff1 < 60000 && diff2 < 60000) {
                 if (e1.category !== e2.category || e2.category !== e3.category) {
                     correlations.push({
@@ -1089,12 +1624,14 @@ class CorrelationEngine {
     correlateCrashPatterns(events) {
         const correlations = [];
         const crashes = events.filter(e => e.category === 'Crash' || e.type === 'crash');
+        
         for (const crash of crashes) {
             const before = events.filter(e => {
                 if (!e.timestamp || !crash.timestamp) return false;
                 const diff = crash.timestamp - e.timestamp;
                 return diff > 0 && diff < 300000;
             });
+            
             if (before.length > 0) {
                 correlations.push({
                     id: `corr_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
@@ -1127,13 +1664,14 @@ class StatisticsEngine {
             uniqueSources: new Set(),
             categories: {},
             types: {},
-            confidence: { high: 0, medium: 0, low: 0 },
+            confidence: { critical: 0, high: 0, medium: 0, low: 0 },
             correlations: { total: 0, byType: {} }
         };
     }
 
     analyze(events, detections, correlations) {
         this.statistics.totalEvents = events.length;
+        
         for (const event of events) {
             if (event.source) this.statistics.uniqueSources.add(event.source);
             const category = event.category || 'Unknown';
@@ -1141,17 +1679,20 @@ class StatisticsEngine {
             const type = event.type || 'unknown';
             this.statistics.types[type] = (this.statistics.types[type] || 0) + 1;
         }
+        
         for (const detection of detections) {
             const confidence = detection.confidence || 'medium';
             if (this.statistics.confidence[confidence] !== undefined) {
                 this.statistics.confidence[confidence]++;
             }
         }
+        
         this.statistics.correlations.total = correlations.length;
         for (const corr of correlations) {
             const type = corr.type || 'unknown';
             this.statistics.correlations.byType[type] = (this.statistics.correlations.byType[type] || 0) + 1;
         }
+        
         return this.getStats();
     }
 
@@ -1172,9 +1713,17 @@ class ScoreEngine {
     constructor() {
         this.weights = { critical: 100, high: 50, medium: 25, low: 10 };
         this.categories = {
-            jailbreak: 1.5, hook: 1.4, proxy: 1.3, vpn: 1.2,
-            sideload: 1.3, certificate: 1.2, developer: 1.1,
-            freefire: 1.0, appstore: 0.8, crash: 1.0, analytics: 0.5
+            jailbreak: 2.0,
+            hook: 1.8,
+            proxy: 1.6,
+            vpn: 1.4,
+            sideload: 1.5,
+            certificate: 1.3,
+            developer: 1.2,
+            freefire: 1.0,
+            appstore: 0.8,
+            crash: 1.0,
+            analytics: 0.5
         };
         this.thresholds = { low: 50, medium: 100, high: 200, critical: 300 };
     }
@@ -1195,6 +1744,7 @@ class ScoreEngine {
             }
             byCategory[evidence.category].count++;
             byCategory[evidence.category].score += score;
+            
             if (evidence.confidence in byConfidence) {
                 byConfidence[evidence.confidence]++;
             }
@@ -1226,17 +1776,33 @@ class ScoreEngine {
 
     getRecommendations(score) {
         const recommendations = [];
+        
         if (score.riskLevel === 'critical' || score.riskLevel === 'high') {
             recommendations.push('🔍 Realizar análise aprofundada dos arquivos indicados');
             recommendations.push('📋 Verificar integridade dos certificados encontrados');
             recommendations.push('🛡️ Validar configurações de rede e VPN');
         }
+        
         if (score.byCategory?.jailbreak) {
             recommendations.push('📱 Verificar presença de ferramentas de jailbreak');
         }
+        
         if (score.byCategory?.proxy) {
             recommendations.push('🌐 Investigar ferramentas de proxy detectadas');
         }
+        
+        if (score.byCategory?.sideload) {
+            recommendations.push('📲 Verificar aplicativos sideload instalados');
+        }
+        
+        if (score.byCategory?.hook) {
+            recommendations.push('⚠️ Detectar ferramentas de hook/injeção');
+        }
+        
+        if (score.byCategory?.certificate) {
+            recommendations.push('🔐 Verificar certificados instalados');
+        }
+        
         return recommendations;
     }
 }
@@ -1383,9 +1949,14 @@ class ExportManager {
             .container { max-width: 1200px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
             .header { border-bottom: 3px solid #007aff; padding-bottom: 20px; margin-bottom: 30px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; }
             .header h1 { color: #007aff; font-size: 28px; }
+            .header .meta { color: #666; font-size: 14px; }
             .score-section { background: linear-gradient(135deg, #007aff, #0051d5); color: white; padding: 20px; border-radius: 8px; margin-bottom: 30px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; }
             .score-number { font-size: 48px; font-weight: bold; }
             .risk-level { padding: 10px 20px; border-radius: 20px; background: rgba(255,255,255,0.2); font-weight: bold; }
+            .risk-critical { background: #ff3b30; }
+            .risk-high { background: #ff9500; }
+            .risk-medium { background: #ffcc00; color: #000; }
+            .risk-low { background: #34c759; }
             .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin-bottom: 30px; }
             .stat-box { background: #f8f9fa; padding: 15px; border-radius: 8px; text-align: center; }
             .stat-box .number { font-size: 24px; font-weight: bold; color: #007aff; }
@@ -1395,51 +1966,129 @@ class ExportManager {
             .detection-item { background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 10px; border-left: 4px solid #007aff; }
             .detection-item .type { font-weight: bold; color: #007aff; }
             .detection-item .confidence { float: right; padding: 2px 10px; border-radius: 10px; font-size: 12px; font-weight: bold; }
-            .confidence-high { background: #ff3b30; color: white; }
-            .confidence-medium { background: #ff9500; color: white; }
+            .confidence-critical { background: #ff3b30; color: white; }
+            .confidence-high { background: #ff9500; color: white; }
+            .confidence-medium { background: #ffcc00; color: #000; }
             .confidence-low { background: #34c759; color: white; }
+            .detection-item .details { margin-top: 5px; color: #666; font-size: 13px; }
+            .correlation-item { background: #f0f7ff; padding: 15px; border-radius: 8px; margin-bottom: 10px; border-left: 4px solid #ff9500; }
+            .correlation-item .type { font-weight: bold; color: #ff9500; }
             .timeline-item { padding: 10px; border-bottom: 1px solid #eee; }
             .timeline-item .time { color: #666; font-size: 14px; font-weight: bold; }
             .timeline-item .desc { color: #333; margin-top: 3px; }
+            .recommendations { background: #f0f7ff; padding: 15px; border-radius: 8px; margin-top: 20px; }
+            .recommendations ul { padding-left: 20px; margin-top: 10px; }
+            .recommendations li { margin: 5px 0; }
         </style>
         </head>
         <body>
         <div class="container">
             <div class="header">
-                <div><h1>🔍 ${report.appName || 'iOS Evidence Scanner'}</h1>
-                <div style="color:#666;font-size:14px;">Versão: ${report.version || '1.0.0'} • ${new Date(report.generated).toLocaleString('pt-BR')}</div></div>
-                <div style="font-size:14px;color:#666;">Eventos: ${report.totalEvents} • Detecções: ${report.totalDetections}</div>
+                <div>
+                    <h1>🔍 ${report.appName || 'iOS Evidence Scanner'}</h1>
+                    <div class="meta">Versão: ${report.version || '1.0.0'} • ${new Date(report.generated).toLocaleString('pt-BR')}</div>
+                </div>
+                <div style="font-size:14px;color:#666;">
+                    Eventos: ${report.totalEvents} • Detecções: ${report.totalDetections}
+                </div>
             </div>
+            
             <div class="score-section">
-                <div><div class="score-number">${report.score}</div><div style="font-size:14px;opacity:0.8;">Score de Evidências</div></div>
-                <div><div class="risk-level">${report.riskLevel}</div></div>
+                <div>
+                    <div class="score-number">${report.score}</div>
+                    <div style="font-size:14px;opacity:0.8;">Score de Evidências</div>
+                </div>
+                <div>
+                    <div class="risk-level risk-${report.riskLevel}">${report.riskLevel.toUpperCase()}</div>
+                </div>
             </div>
+            
             <div class="stats-grid">
-                <div class="stat-box"><div class="number">${Object.keys(report.statistics?.categories || {}).length}</div><div class="label">Categorias</div></div>
-                <div class="stat-box"><div class="number">${report.statistics?.uniqueSourcesCount || 0}</div><div class="label">Fontes</div></div>
-                <div class="stat-box"><div class="number">${report.statistics?.confidence?.high || 0}</div><div class="label">Alta Confiança</div></div>
-                <div class="stat-box"><div class="number">${report.totalCorrelations || 0}</div><div class="label">Correlações</div></div>
+                <div class="stat-box">
+                    <div class="number">${Object.keys(report.statistics?.categories || {}).length}</div>
+                    <div class="label">Categorias</div>
+                </div>
+                <div class="stat-box">
+                    <div class="number">${report.statistics?.uniqueSourcesCount || 0}</div>
+                    <div class="label">Fontes</div>
+                </div>
+                <div class="stat-box">
+                    <div class="number">${report.statistics?.confidence?.critical || 0}</div>
+                    <div class="label">Crítico</div>
+                </div>
+                <div class="stat-box">
+                    <div class="number">${report.statistics?.confidence?.high || 0}</div>
+                    <div class="label">Alta Confiança</div>
+                </div>
+                <div class="stat-box">
+                    <div class="number">${report.totalCorrelations || 0}</div>
+                    <div class="label">Correlações</div>
+                </div>
+                <div class="stat-box">
+                    <div class="number">${report.totalEvidences || 0}</div>
+                    <div class="label">Evidências</div>
+                </div>
             </div>
+
             ${report.detections && report.detections.length > 0 ? `
-            <div class="section"><h2>🔎 Detecções (${report.detections.length})</h2>
-            ${report.detections.slice(0, 50).map(d => `
-                <div class="detection-item">
-                    <div><span class="type">${d.type || 'Detecção'}</span>
-                    <span class="confidence confidence-${d.confidence || 'low'}">${(d.confidence || 'low').toUpperCase()}</span></div>
-                    <div style="margin-top:5px;color:#666;font-size:14px;">${d.detector || 'Unknown'}</div>
-                    <div style="margin-top:5px;color:#888;font-size:13px;">${d.explanation || ''}</div>
-                </div>
-            `).join('')}
+            <div class="section">
+                <h2>🔎 Detecções (${report.detections.length})</h2>
+                ${report.detections.slice(0, 100).map(d => `
+                    <div class="detection-item">
+                        <div>
+                            <span class="type">${d.type || 'Detecção'}</span>
+                            <span class="confidence confidence-${d.confidence || 'low'}">${(d.confidence || 'low').toUpperCase()}</span>
+                        </div>
+                        <div style="margin-top:5px;color:#666;font-size:14px;">${d.detector || 'Unknown'}</div>
+                        <div style="margin-top:5px;color:#888;font-size:13px;">${d.explanation || ''}</div>
+                        ${d.details ? `<div class="details">${d.details}</div>` : ''}
+                        ${d.evidence?.source ? `<div class="details">📁 ${d.evidence.source}</div>` : ''}
+                        ${d.timestamp ? `<div class="details">🕐 ${new Date(d.timestamp).toLocaleString('pt-BR')}</div>` : ''}
+                    </div>
+                `).join('')}
+                ${report.detections.length > 100 ? `<div style="color:#999;padding:10px;">... e mais ${report.detections.length - 100} detecções</div>` : ''}
             </div>` : ''}
+
+            ${report.correlations && report.correlations.length > 0 ? `
+            <div class="section">
+                <h2>🔗 Correlações (${report.correlations.length})</h2>
+                ${report.correlations.slice(0, 30).map(c => `
+                    <div class="correlation-item">
+                        <div>
+                            <span class="type">${c.type || 'Correlação'}</span>
+                            <span style="float:right;font-size:12px;color:#666;">${c.confidence || 'medium'}</span>
+                        </div>
+                        <div style="margin-top:5px;color:#666;font-size:14px;">${c.description || ''}</div>
+                        ${c.explanation ? `<div style="margin-top:3px;color:#888;font-size:12px;">${c.explanation}</div>` : ''}
+                        <div style="margin-top:3px;color:#999;font-size:12px;">${c.events ? `${c.events.length} evento(s) relacionados` : ''}</div>
+                    </div>
+                `).join('')}
+            </div>` : ''}
+
+            ${report.recommendations && report.recommendations.length > 0 ? `
+            <div class="section">
+                <div class="recommendations">
+                    <h2>💡 Recomendações</h2>
+                    <ul>
+                        ${report.recommendations.map(r => `<li>${r}</li>`).join('')}
+                    </ul>
+                </div>
+            </div>` : ''}
+
             ${report.timeline && report.timeline.length > 0 ? `
-            <div class="section"><h2>📅 Timeline (${report.timeline.length})</h2>
-            ${report.timeline.slice(0, 50).map(item => `
-                <div class="timeline-item">
-                    <div class="time">${item.key || new Date(item.timestamp).toLocaleString('pt-BR')}</div>
-                    <div class="desc">${Object.keys(item.categories || {}).join(', ')}: ${item.count} evento(s)</div>
-                </div>
-            `).join('')}
+            <div class="section">
+                <h2>📅 Timeline (${report.timeline.length})</h2>
+                ${report.timeline.slice(0, 50).map(item => `
+                    <div class="timeline-item">
+                        <div class="time">${item.key || new Date(item.timestamp).toLocaleString('pt-BR')}</div>
+                        <div class="desc">
+                            ${Object.entries(item.categories || {}).map(([cat, count]) => `${cat}: ${count}`).join(' • ')}
+                            (${item.count} evento${item.count > 1 ? 's' : ''})
+                        </div>
+                    </div>
+                `).join('')}
             </div>` : ''}
+
             <div style="text-align:center;color:#999;padding:30px 0 10px;font-size:12px;border-top:1px solid #eee;margin-top:30px;">
                 ${report.appName || 'iOS Evidence Scanner'} - Análise baseada exclusivamente em evidências nos arquivos
             </div>
@@ -1456,15 +2105,46 @@ class ExportManager {
         output.push(`📅 Relatório: ${new Date(report.generated).toLocaleString('pt-BR')}`);
         output.push(`📊 Eventos: ${report.totalEvents}`);
         output.push(`🔍 Detecções: ${report.totalDetections}`);
-        output.push(`📈 SCORE: ${report.score} - ${report.riskLevel}`);
+        output.push(`📈 SCORE: ${report.score} - ${report.riskLevel.toUpperCase()}`);
         output.push('');
+        output.push('📊 ESTATÍSTICAS:');
+        output.push(`  Categorias: ${Object.keys(report.statistics?.categories || {}).join(', ')}`);
+        output.push(`  Fontes: ${report.statistics?.uniqueSourcesCount || 0}`);
+        output.push(`  Crítico: ${report.statistics?.confidence?.critical || 0}`);
+        output.push(`  Alta Confiança: ${report.statistics?.confidence?.high || 0}`);
+        output.push(`  Correlações: ${report.totalCorrelations || 0}`);
+        output.push('');
+        
         if (report.detections && report.detections.length > 0) {
             output.push('🔎 DETECÇÕES:');
-            for (const d of report.detections.slice(0, 30)) {
+            for (const d of report.detections.slice(0, 50)) {
                 output.push(`  [${(d.confidence || 'low').toUpperCase()}] ${d.detector}: ${d.type}`);
                 output.push(`    ${d.explanation || ''}`);
+                if (d.details) output.push(`    ${d.details}`);
+                output.push('');
+            }
+            if (report.detections.length > 50) {
+                output.push(`  ... e mais ${report.detections.length - 50} detecções`);
             }
         }
+        
+        if (report.correlations && report.correlations.length > 0) {
+            output.push('');
+            output.push('🔗 CORRELAÇÕES:');
+            for (const c of report.correlations.slice(0, 20)) {
+                output.push(`  ${c.type}: ${c.description}`);
+                if (c.explanation) output.push(`    ${c.explanation}`);
+            }
+        }
+        
+        if (report.recommendations && report.recommendations.length > 0) {
+            output.push('');
+            output.push('💡 RECOMENDAÇÕES:');
+            for (const r of report.recommendations) {
+                output.push(`  ${r}`);
+            }
+        }
+        
         output.push('');
         output.push('='.repeat(60));
         return output.join('\n');
@@ -1490,7 +2170,7 @@ class ImprovedScriptableUI {
     async showMainMenu() {
         const alert = new Alert();
         alert.title = '🔍 iOS Evidence Scanner';
-        alert.message = `v${this.scanner?.configManager?.get('version') || '2.0.0'}\n\nScanner forense para análise de evidências em arquivos iOS\n\nBaseado exclusivamente em evidências reais`;
+        alert.message = `v${this.scanner?.configManager?.get('version') || '2.0.0'}\n\nScanner forense para análise de evidências em arquivos iOS\n\nBaseado exclusivamente em evidências reais\n\nDetectores: Proxy, VPN, Jailbreak, Sideload, Hook, Free Fire, Certificados`;
         alert.addAction('🔍 Nova Análise');
         alert.addAction('📊 Histórico');
         alert.addAction('⚙️ Configurações');
@@ -1633,6 +2313,12 @@ class ImprovedScriptableUI {
   Tempo: ${(stats.executionTime / 1000).toFixed(2)}s
 
 📁 Arquivos: ${stats.fileCount || 0}
+
+🔍 Detecções por Confiança:
+  Crítico: ${stats.byConfidence?.critical || 0}
+  Alta: ${stats.byConfidence?.high || 0}
+  Média: ${stats.byConfidence?.medium || 0}
+  Baixa: ${stats.byConfidence?.low || 0}
         `;
         alert.addAction('OK');
         await alert.presentAlert();
@@ -1669,30 +2355,75 @@ class ImprovedScriptableUI {
                 li { margin: 10px 0; }
                 .tip { background: #f0f7ff; padding: 15px; border-radius: 8px; border-left: 4px solid #007aff; margin: 20px 0; }
                 .warning { background: #fff3e0; padding: 15px; border-radius: 8px; border-left: 4px solid #ff9500; margin: 20px 0; }
+                .detector-list { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 10px 0; }
+                .detector-item { background: #f8f9fa; padding: 8px; border-radius: 5px; text-align: center; font-size: 14px; }
             </style>
             </head>
             <body>
             <div class="container">
                 <h1>📖 Guia do iOS Evidence Scanner</h1>
+                
                 <h2>🔍 O que faz?</h2>
                 <p>Analisa arquivos do sistema iOS em busca de evidências técnicas.</p>
+                
+                <h2>🔎 Detectores Disponíveis</h2>
+                <div class="detector-list">
+                    <div class="detector-item">🛡️ Proxy</div>
+                    <div class="detector-item">🔒 VPN</div>
+                    <div class="detector-item">📱 Jailbreak</div>
+                    <div class="detector-item">📲 Sideload</div>
+                    <div class="detector-item">🎣 Hook/Frida</div>
+                    <div class="detector-item">🎮 Free Fire</div>
+                    <div class="detector-item">🔐 Certificados</div>
+                    <div class="detector-item">💥 Crash Reports</div>
+                </div>
+                
                 <h2>📁 Como usar?</h2>
                 <ol>
                     <li><strong>Selecionar:</strong> Escolha o(s) arquivo(s) para analisar</li>
                     <li><strong>Analisar:</strong> Aguarde o processamento automático</li>
                     <li><strong>Visualizar:</strong> Veja o relatório completo</li>
                 </ol>
-                <div class="tip"><strong>💡 Dica:</strong> Use arquivos de sysdiagnose para melhores resultados</div>
-                <div class="warning"><strong>⚠️ Importante:</strong> O scanner não afirma conclusões, apenas apresenta evidências</div>
+                
+                <div class="tip">
+                    <strong>💡 Dica:</strong> Use arquivos de sysdiagnose para melhores resultados
+                </div>
+                
+                <div class="warning">
+                    <strong>⚠️ Importante:</strong> O scanner não afirma conclusões, apenas apresenta evidências
+                </div>
+                
                 <h2>🔧 Formatos Suportados</h2>
                 <ul>
                     <li>.plist, .json, .log, .txt</li>
                     <li>.csv, .xml, .ips, .tracev3</li>
                 </ul>
+                
+                <h2>📊 Níveis de Confiança</h2>
+                <ul>
+                    <li><span style="color:#ff3b30;">Crítico</span> - Evidências fortes</li>
+                    <li><span style="color:#ff9500;">Alta</span> - Evidências significativas</li>
+                    <li><span style="color:#ffcc00;">Média</span> - Indícios</li>
+                    <li><span style="color:#34c759;">Baixa</span> - Possíveis indícios</li>
+                </ul>
             </div>
             </body></html>
         `);
         await webView.present(true);
+    }
+
+    async showCancelConfirmation() {
+        const alert = new Alert();
+        alert.title = '⚠️ Cancelar Análise';
+        alert.message = 'Deseja realmente cancelar a análise em andamento?';
+        alert.addAction('Sim, cancelar');
+        alert.addAction('Continuar');
+        const action = await alert.presentAlert();
+        if (action === 0) {
+            this.shouldCancel = true;
+            return true;
+        }
+        return false;
     }
 }
 
@@ -1706,7 +2437,7 @@ class Application {
         this.fileLoader = new ScriptableFileLoader(this.configManager);
         this.parser = new AdvancedParser();
         this.detectorManager = new DetectorManager();
-        this.correlationEngine = new CorrelationEngine();
+        this.correlationEngine = new EnhancedCorrelationEngine();
         this.statisticsEngine = new StatisticsEngine();
         this.timelineBuilder = new EnhancedTimelineBuilder();
         this.scoreEngine = new ScoreEngine();
@@ -1724,9 +2455,14 @@ class Application {
     }
 
     registerDetectors() {
-        this.detectorManager.register(new EnhancedVPNDetector());
-        this.detectorManager.register(new EnhancedProxyDetector());
-        this.detectorManager.register(new EnhancedJailbreakDetector());
+        // Detectores aprimorados
+        this.detectorManager.register(new AdvancedProxyDetector());
+        this.detectorManager.register(new AdvancedVPNDetector());
+        this.detectorManager.register(new AdvancedJailbreakDetector());
+        this.detectorManager.register(new AdvancedSideloadDetector());
+        this.detectorManager.register(new AdvancedHookDetector());
+        this.detectorManager.register(new AdvancedFreeFireDetector());
+        this.detectorManager.register(new AdvancedCertificateDetector());
     }
 
     async run() {
@@ -1780,6 +2516,7 @@ class Application {
             const totalFiles = files.length;
             let processedFiles = 0;
 
+            // Parser
             for (const file of files) {
                 await this.ui.showProgress(
                     processedFiles,
@@ -1798,7 +2535,7 @@ class Application {
                         key: event.type || 'event',
                         value: event.description || '',
                         timestamp: event.timestamp || new Date(),
-                        confidence: event.confidence || 'medium',
+                        confidence: 'low',
                         description: event.description || '',
                         category: event.category || 'System'
                     });
@@ -1808,6 +2545,7 @@ class Application {
                 processedFiles++;
             }
 
+            // Detectores
             await this.ui.showProgress(1, 1, '🔎 Executando detectores...', 
                 `${this.detectorManager.getDetectorCount()} detectores ativos`);
             
@@ -1816,7 +2554,7 @@ class Application {
             for (const detection of this.detections) {
                 const evidence = new Evidence({
                     detector: detection.detector,
-                    sourceFile: detection.evidence?.sourceFile || 'unknown',
+                    sourceFile: detection.evidence?.source || 'unknown',
                     key: detection.type || 'detection',
                     value: detection.explanation || '',
                     timestamp: detection.timestamp || new Date(),
@@ -1827,17 +2565,28 @@ class Application {
                 this.evidenceCollection.add(evidence);
             }
 
+            // Correlação
             await this.ui.showProgress(1, 1, '🔗 Correlacionando eventos...', 
                 `${this.events.length} eventos processados`);
             
             this.correlations = this.correlationEngine.correlate(this.events);
 
+            // Score
             const score = this.scoreEngine.calculate(this.evidenceCollection.getAll());
-            const stats = this.statisticsEngine.analyze(this.events, this.detections, this.correlations);
+
+            // Estatísticas
+            const stats = this.statisticsEngine.analyze(
+                this.events,
+                this.detections,
+                this.correlations
+            );
+
+            // Timeline
             const timeline = this.timelineBuilder.build(this.events);
 
             this.endTime = Date.now();
 
+            // Relatório
             const report = {
                 appName: this.configManager.get('appName'),
                 version: this.configManager.get('version'),
@@ -1864,8 +2613,10 @@ class Application {
                 }
             };
 
+            // Mostrar relatório
             await this.ui.showReport(report);
 
+            // Perguntar exportação
             const exportAlert = new Alert();
             exportAlert.title = '📥 Exportar Relatório';
             exportAlert.message = 'Deseja exportar o relatório em múltiplos formatos?';
@@ -1876,13 +2627,20 @@ class Application {
                 await this.exportReport(report);
             }
 
+            // Estatísticas
             const statsData = {
                 totalEvents: this.events.length,
                 totalDetections: this.detections.length,
                 totalCorrelations: this.correlations.length,
                 totalEvidences: this.evidenceCollection.getAll().length,
                 executionTime: this.endTime - this.startTime,
-                fileCount: files.length
+                fileCount: files.length,
+                byConfidence: {
+                    critical: this.detections.filter(d => d.confidence === 'critical').length,
+                    high: this.detections.filter(d => d.confidence === 'high').length,
+                    medium: this.detections.filter(d => d.confidence === 'medium').length,
+                    low: this.detections.filter(d => d.confidence === 'low').length
+                }
             };
             await this.ui.showStats(statsData);
 
@@ -1972,6 +2730,7 @@ class Application {
 💾 Cache: ${this.configManager.get('cacheEnabled') ? '✅' : '❌'}
 📦 Tamanho máximo: ${(this.configManager.get('maxFileSize') / 1024 / 1024).toFixed(1)} MB
 📁 Formatos: ${this.configManager.getSupportedExtensions().join(', ')}
+🔎 Detectores: ${this.detectorManager.getDetectorCount()} ativos
         `;
         alert.addAction('🔍 Debug: ' + (this.configManager.get('debug') ? 'Desativar' : 'Ativar'));
         alert.addAction('💾 Cache: ' + (this.configManager.get('cacheEnabled') ? 'Desativar' : 'Ativar'));
