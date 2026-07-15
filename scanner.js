@@ -205,65 +205,47 @@ class ScriptableFileLoader {
 
     /**
      * Método principal para selecionar arquivos
-     * Usa o método nativo do Scriptable para abrir seletor de arquivos
      */
     async selectFiles(allowMultiple = true) {
         try {
             Logger.info('Abrindo seletor de arquivos...');
             
-            const fm = FileManager.iCloud();
-            
-            // Tenta usar o método nativo do Scriptable para selecionar arquivo
+            // Método 1: Tentar usar o seletor nativo do iOS
             try {
-                // Método 1: Usar a função nativa de importação
-                if (typeof fm.importFile === 'function') {
-                    const file = await fm.importFile();
-                    if (file) {
-                        const loadedFile = await this.loadFileFromPath(file);
-                        if (loadedFile) {
-                            this.selectedFiles = [loadedFile];
-                            return [loadedFile];
-                        }
-                    }
-                }
-            } catch (e) {
-                Logger.warn(`Método importFile falhou: ${e.message}`);
-            }
-
-            // Método 2: Usar a função nativa de DocumentPicker
-            try {
-                // Scriptable tem uma função global para selecionar arquivos
+                // Tenta usar o DocumentPicker diretamente
                 if (typeof DocumentPicker !== 'undefined') {
-                    // Tenta usar a função estática
-                    const result = await DocumentPicker.open();
-                    if (result && result.length > 0) {
-                        const files = [];
-                        for (const file of result) {
-                            const loaded = await this.loadFileFromPath(file.path || file);
-                            if (loaded) files.push(loaded);
+                    try {
+                        const result = await DocumentPicker.open();
+                        if (result && result.length > 0) {
+                            const files = [];
+                            for (const file of result) {
+                                const loaded = await this.loadFileFromPath(file);
+                                if (loaded) files.push(loaded);
+                            }
+                            if (files.length > 0) {
+                                this.selectedFiles = files;
+                                return files;
+                            }
                         }
-                        if (files.length > 0) {
-                            this.selectedFiles = files;
-                            return files;
-                        }
+                    } catch (e) {
+                        Logger.warn(`DocumentPicker falhou: ${e.message}`);
                     }
                 }
             } catch (e) {
-                Logger.warn(`DocumentPicker falhou: ${e.message}`);
+                Logger.warn(`DocumentPicker não disponível: ${e.message}`);
             }
 
-            // Método 3: Fallback - usar iCloud Drive
+            // Método 2: Usar iCloud Drive (fallback principal)
             return await this.selectFilesFromiCloud(allowMultiple);
 
         } catch (error) {
             Logger.error(`Erro na seleção de arquivos: ${error.message}`);
-            // Último recurso: iCloud
             return await this.selectFilesFromiCloud(allowMultiple);
         }
     }
 
     /**
-     * Seleção via iCloud Drive (Fallback)
+     * Seleção via iCloud Drive
      */
     async selectFilesFromiCloud(allowMultiple = true) {
         try {
@@ -272,6 +254,8 @@ class ScriptableFileLoader {
             
             // Lista arquivos na pasta do Scriptable
             const items = fm.listContents(docs);
+            
+            // Filtra apenas arquivos suportados
             const supportedItems = items.filter(item => {
                 const ext = this.getFileExtension(item);
                 return this.supportedExtensions.includes(ext);
@@ -293,19 +277,32 @@ class ScriptableFileLoader {
             const fileInfos = [];
             for (const item of supportedItems) {
                 const path = fm.joinPath(docs, item);
-                const info = fm.getFileInfo(path);
                 const ext = this.getFileExtension(item);
                 const icon = this.getFileIcon(ext);
                 
+                // Obtém informações do arquivo
+                let fileSize = 0;
+                try {
+                    const content = fm.readString(path);
+                    fileSize = content ? content.length : 0;
+                } catch (e) {
+                    try {
+                        const data = fm.read(path);
+                        fileSize = data ? data.length : 0;
+                    } catch (e2) {
+                        Logger.warn(`Não foi possível ler informações de ${item}`);
+                    }
+                }
+                
                 const row = new UITableRow(`${icon} ${item}`);
-                row.detailText = `${this.formatFileSize(info.size)} • ${new Date(info.modifiedDate).toLocaleString('pt-BR')}`;
+                row.detailText = `${this.formatFileSize(fileSize)}`;
                 row.dismissOnSelect = false;
                 
                 if (allowMultiple) {
                     row.addCheckbox();
                 }
                 
-                fileInfos.push({ item, path, info, row });
+                fileInfos.push({ item, path, size: fileSize, row });
                 selection.addRow(row);
             }
 
@@ -335,15 +332,17 @@ class ScriptableFileLoader {
                     const fileInfo = fileInfos[row.index];
                     try {
                         const content = fm.readString(fileInfo.path);
-                        files.push({
-                            name: fileInfo.item,
-                            path: fileInfo.path,
-                            extension: this.getFileExtension(fileInfo.item),
-                            size: fileInfo.info.size,
-                            modified: fileInfo.info.modifiedDate,
-                            content: content,
-                            type: this.detectFileType({ name: fileInfo.item, extension: this.getFileExtension(fileInfo.item) })
-                        });
+                        if (content) {
+                            files.push({
+                                name: fileInfo.item,
+                                path: fileInfo.path,
+                                extension: this.getFileExtension(fileInfo.item),
+                                size: content.length,
+                                modified: new Date(),
+                                content: content,
+                                type: this.detectFileType({ name: fileInfo.item, extension: this.getFileExtension(fileInfo.item) })
+                            });
+                        }
                     } catch (error) {
                         Logger.error(`Erro ao ler ${fileInfo.item}: ${error.message}`);
                     }
@@ -372,15 +371,17 @@ class ScriptableFileLoader {
                     const fileInfo = fileInfos[row.index];
                     try {
                         const content = fm.readString(fileInfo.path);
-                        files.push({
-                            name: fileInfo.item,
-                            path: fileInfo.path,
-                            extension: this.getFileExtension(fileInfo.item),
-                            size: fileInfo.info.size,
-                            modified: fileInfo.info.modifiedDate,
-                            content: content,
-                            type: this.detectFileType({ name: fileInfo.item, extension: this.getFileExtension(fileInfo.item) })
-                        });
+                        if (content) {
+                            files.push({
+                                name: fileInfo.item,
+                                path: fileInfo.path,
+                                extension: this.getFileExtension(fileInfo.item),
+                                size: content.length,
+                                modified: new Date(),
+                                content: content,
+                                type: this.detectFileType({ name: fileInfo.item, extension: this.getFileExtension(fileInfo.item) })
+                            });
+                        }
                     } catch (error) {
                         Logger.error(`Erro ao ler ${fileInfo.item}: ${error.message}`);
                     }
@@ -394,7 +395,6 @@ class ScriptableFileLoader {
         } catch (error) {
             Logger.error(`Erro na seleção iCloud: ${error.message}`);
             
-            // Mostra erro amigável
             const alert = new Alert();
             alert.title = '❌ Erro ao selecionar arquivos';
             alert.message = `${error.message}\n\nDica: Coloque os arquivos na pasta:\niCloud Drive → Scriptable`;
@@ -412,26 +412,25 @@ class ScriptableFileLoader {
         try {
             const fm = FileManager.iCloud();
             
-            // Se for um objeto com path
             if (typeof path === 'object' && path.path) {
                 path = path.path;
             }
             
-            const info = fm.getFileInfo(path);
-            if (!info) throw new Error(`Arquivo não encontrado: ${path}`);
-            
             const content = fm.readString(path);
+            if (!content) {
+                throw new Error(`Arquivo vazio ou não encontrado: ${path}`);
+            }
+            
             const file = {
                 name: this.getFileName(path),
                 path: path,
                 extension: this.getFileExtension(path),
-                size: info.size,
-                modified: info.modifiedDate,
+                size: content.length,
+                modified: new Date(),
                 content: content,
                 type: this.detectFileType({ name: path })
             };
             
-            // Valida o arquivo
             const validation = this.validateFile(file);
             if (!validation.valid) {
                 throw new Error(validation.error);
@@ -446,37 +445,35 @@ class ScriptableFileLoader {
     }
 
     /**
-     * Carrega um arquivo individual (para compatibilidade)
+     * Carrega um arquivo individual
      */
     async loadFile(file) {
         try {
             const fm = FileManager.iCloud();
             let loadedFile = null;
 
-            // Caso 1: Caminho do arquivo
             if (typeof file === 'string') {
                 const path = file;
-                const info = fm.getFileInfo(path);
-                if (!info) throw new Error(`Arquivo não encontrado: ${path}`);
-                
                 const content = fm.readString(path);
+                if (!content) {
+                    throw new Error(`Arquivo vazio ou não encontrado: ${path}`);
+                }
+                
                 loadedFile = {
                     name: this.getFileName(path),
                     path: path,
                     extension: this.getFileExtension(path),
-                    size: info.size,
-                    modified: info.modifiedDate,
+                    size: content.length,
+                    modified: new Date(),
                     content: content,
                     type: this.detectFileType({ name: path })
                 };
-            }
-            // Caso 2: Objeto com conteúdo
-            else if (file.content) {
+            } else if (file.content) {
                 loadedFile = {
                     name: file.name || 'arquivo',
                     path: file.path || '',
                     extension: this.getFileExtension(file.name || ''),
-                    size: file.size || file.content.length,
+                    size: file.content.length,
                     modified: file.modified || new Date(),
                     content: file.content,
                     type: this.detectFileType({ name: file.name || 'arquivo' })
@@ -485,13 +482,11 @@ class ScriptableFileLoader {
                 throw new Error('Formato de arquivo não suportado');
             }
 
-            // Valida o arquivo
             const validation = this.validateFile(loadedFile);
             if (!validation.valid) {
                 throw new Error(validation.error);
             }
 
-            // Adiciona ao cache
             if (this.configManager.get('cacheEnabled')) {
                 this.cacheManager.set(loadedFile.path || loadedFile.name, loadedFile);
             }
@@ -898,8 +893,7 @@ class EnhancedVPNDetector extends BaseDetector {
         this.patterns = {
             process: ['packettunnel', 'networkextension', 'vpn', 'wireguard', 'openvpn', 'ikev2'],
             files: ['vpn.conf', 'wg.conf', 'ovpn', 'vpn.log'],
-            bundleIds: ['com.wireguard', 'com.openvpn', 'com.apple.networkextension'],
-            services: ['VPN', 'L2TP', 'PPTP', 'IPSec']
+            bundleIds: ['com.wireguard', 'com.openvpn', 'com.apple.networkextension']
         };
     }
 
@@ -1006,8 +1000,7 @@ class CorrelationEngine {
             this.correlateProxyAndApp,
             this.correlateVPNAndNetwork,
             this.correlateTiming,
-            this.correlateCrashPatterns,
-            this.correlateSideloadAndFreeFire
+            this.correlateCrashPatterns
         ];
     }
 
@@ -1111,27 +1104,6 @@ class CorrelationEngine {
                     events: [crash, ...before],
                     timestamp: crash.timestamp
                 });
-            }
-        }
-        return correlations;
-    }
-
-    correlateSideloadAndFreeFire(events) {
-        const correlations = [];
-        const sideloadEvents = events.filter(e => e.category === 'Sideload');
-        const ffEvents = events.filter(e => e.category === 'FreeFire');
-        for (const sideload of sideloadEvents) {
-            for (const ff of ffEvents) {
-                if (this.isTimeClose(sideload.timestamp, ff.timestamp, 30)) {
-                    correlations.push({
-                        id: `corr_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-                        type: 'sideload_ff',
-                        description: 'Sideload detectado próximo ao uso do Free Fire',
-                        confidence: 'high',
-                        events: [sideload, ff],
-                        timestamp: ff.timestamp
-                    });
-                }
             }
         }
         return correlations;
@@ -1502,7 +1474,7 @@ class ExportManager {
 }
 
 // ============================================
-// 17. UI - CORRIGIDA COM SELEÇÃO DE ARQUIVOS
+// 17. UI - CORRIGIDA
 // ============================================
 
 class ImprovedScriptableUI {
@@ -1518,7 +1490,7 @@ class ImprovedScriptableUI {
     async showMainMenu() {
         const alert = new Alert();
         alert.title = '🔍 iOS Evidence Scanner';
-        alert.message = `v${this.scanner?.configManager?.get('version') || '2.0.0'}\n\nScanner forense para análise de evidências em arquivos iOS\n\nBaseado exclusivamente em evidências reais\n\n📊 ${this.scanner?.fileLoader?.getSelectedFiles()?.length || 0} arquivo(s) selecionado(s)`;
+        alert.message = `v${this.scanner?.configManager?.get('version') || '2.0.0'}\n\nScanner forense para análise de evidências em arquivos iOS\n\nBaseado exclusivamente em evidências reais`;
         alert.addAction('🔍 Nova Análise');
         alert.addAction('📊 Histórico');
         alert.addAction('⚙️ Configurações');
@@ -1529,15 +1501,13 @@ class ImprovedScriptableUI {
 
     async selectFiles() {
         try {
-            // Usa o FileLoader do scanner
             if (!this.scanner || !this.scanner.fileLoader) {
                 throw new Error('FileLoader não disponível');
             }
             
-            // Mostra alerta informativo
             const alert = new Alert();
             alert.title = '📂 Selecionar Arquivo';
-            alert.message = 'Escolha o arquivo que deseja analisar.\n\nVocê pode:\n• Selecionar da pasta do Scriptable\n• Usar o seletor nativo do iOS\n• Importar via compartilhamento';
+            alert.message = 'Escolha o arquivo que deseja analisar.\n\nVocê pode:\n• Selecionar da pasta do Scriptable\n• Usar o seletor nativo do iOS';
             alert.addAction('📂 Escolher da iCloud');
             alert.addAction('📂 Seletor Nativo');
             alert.addAction('❌ Cancelar');
@@ -1551,10 +1521,8 @@ class ImprovedScriptableUI {
             let files = [];
             
             if (action === 0) {
-                // Usa iCloud Drive
                 files = await this.scanner.fileLoader.selectFilesFromiCloud(true);
             } else {
-                // Tenta o seletor nativo
                 files = await this.scanner.fileLoader.selectFiles(true);
             }
             
@@ -1617,7 +1585,6 @@ class ImprovedScriptableUI {
         
         console.log(`Progresso: ${percentage}% - ${message}${details ? ' - ' + details : ''}`);
         
-        // Mostra alerta apenas em marcos importantes
         if (percentage % 20 === 0 || percentage === 100 || current === total) {
             const alert = new Alert();
             alert.title = '🔄 Processando...';
@@ -1629,7 +1596,6 @@ class ImprovedScriptableUI {
                 return;
             }
             
-            // Não espera o alerta fechar para não travar
             alert.presentAlert().catch(() => {});
         }
     }
@@ -1667,11 +1633,6 @@ class ImprovedScriptableUI {
   Tempo: ${(stats.executionTime / 1000).toFixed(2)}s
 
 📁 Arquivos: ${stats.fileCount || 0}
-
-⚡ Performance:
-  ${Object.entries(stats.performance?.phases || {})
-      .map(([phase, data]) => `  ${phase}: ${data.duration}ms`)
-      .join('\n')}
         `;
         alert.addAction('OK');
         await alert.presentAlert();
@@ -1733,20 +1694,6 @@ class ImprovedScriptableUI {
         `);
         await webView.present(true);
     }
-
-    async showCancelConfirmation() {
-        const alert = new Alert();
-        alert.title = '⚠️ Cancelar Análise';
-        alert.message = 'Deseja realmente cancelar a análise em andamento?';
-        alert.addAction('Sim, cancelar');
-        alert.addAction('Continuar');
-        const action = await alert.presentAlert();
-        if (action === 0) {
-            this.shouldCancel = true;
-            return true;
-        }
-        return false;
-    }
 }
 
 // ============================================
@@ -1773,7 +1720,6 @@ class Application {
         this.startTime = null;
         this.endTime = null;
         
-        // Registra detectores
         this.registerDetectors();
     }
 
@@ -1789,22 +1735,20 @@ class Application {
                 const action = await this.ui.showMainMenu();
                 
                 switch (action) {
-                    case 0: // Nova Análise
+                    case 0:
                         await this.runAnalysis();
                         break;
-                    case 1: // Histórico
+                    case 1:
                         await this.showHistory();
                         break;
-                    case 2: // Configurações
+                    case 2:
                         await this.showSettings();
                         break;
-                    case 3: // Ajuda
+                    case 3:
                         await this.ui.showHelp();
                         break;
-                    case 4: // Sair
+                    case 4:
                         return;
-                    default:
-                        break;
                 }
             }
         } catch (error) {
@@ -1814,7 +1758,6 @@ class Application {
 
     async runAnalysis() {
         try {
-            // 1. Selecionar arquivos
             const files = await this.ui.selectFiles();
             if (!files || files.length === 0) {
                 const alert = new Alert();
@@ -1825,13 +1768,9 @@ class Application {
                 return;
             }
 
-            // 2. Confirmar seleção
             const confirmed = await this.ui.showFileInfo(files);
-            if (!confirmed) {
-                return;
-            }
+            if (!confirmed) return;
 
-            // 3. Analisar
             this.startTime = Date.now();
             this.events = [];
             this.detections = [];
@@ -1849,11 +1788,9 @@ class Application {
                     `Tamanho: ${this.fileLoader.formatFileSize(file.size)}`
                 );
 
-                // Parser
                 const parsedEvents = await this.parser.parse(file);
                 this.events.push(...parsedEvents);
 
-                // Evidências
                 for (const event of parsedEvents) {
                     const evidence = new Evidence({
                         detector: 'Parser',
@@ -1871,7 +1808,6 @@ class Application {
                 processedFiles++;
             }
 
-            // Detectores
             await this.ui.showProgress(1, 1, '🔎 Executando detectores...', 
                 `${this.detectorManager.getDetectorCount()} detectores ativos`);
             
@@ -1891,28 +1827,17 @@ class Application {
                 this.evidenceCollection.add(evidence);
             }
 
-            // Correlação
             await this.ui.showProgress(1, 1, '🔗 Correlacionando eventos...', 
                 `${this.events.length} eventos processados`);
             
             this.correlations = this.correlationEngine.correlate(this.events);
 
-            // Score
             const score = this.scoreEngine.calculate(this.evidenceCollection.getAll());
-
-            // Estatísticas
-            const stats = this.statisticsEngine.analyze(
-                this.events,
-                this.detections,
-                this.correlations
-            );
-
-            // Timeline
+            const stats = this.statisticsEngine.analyze(this.events, this.detections, this.correlations);
             const timeline = this.timelineBuilder.build(this.events);
 
             this.endTime = Date.now();
 
-            // Relatório
             const report = {
                 appName: this.configManager.get('appName'),
                 version: this.configManager.get('version'),
@@ -1935,19 +1860,12 @@ class Application {
                     modified: f.modified
                 })),
                 performance: {
-                    totalTime: this.endTime - this.startTime,
-                    phases: {
-                        parsing: 'Completo',
-                        detection: 'Completo',
-                        correlation: 'Completo'
-                    }
+                    totalTime: this.endTime - this.startTime
                 }
             };
 
-            // Mostrar relatório
             await this.ui.showReport(report);
 
-            // Perguntar exportação
             const exportAlert = new Alert();
             exportAlert.title = '📥 Exportar Relatório';
             exportAlert.message = 'Deseja exportar o relatório em múltiplos formatos?';
@@ -1958,15 +1876,13 @@ class Application {
                 await this.exportReport(report);
             }
 
-            // Estatísticas
             const statsData = {
                 totalEvents: this.events.length,
                 totalDetections: this.detections.length,
                 totalCorrelations: this.correlations.length,
                 totalEvidences: this.evidenceCollection.getAll().length,
                 executionTime: this.endTime - this.startTime,
-                fileCount: files.length,
-                performance: report.performance
+                fileCount: files.length
             };
             await this.ui.showStats(statsData);
 
@@ -2022,8 +1938,12 @@ class Application {
             for (const report of reports.slice(0, 20)) {
                 const row = new UITableRow(`📄 ${report}`);
                 const path = fm.joinPath(docs, report);
-                const info = fm.getFileInfo(path);
-                row.detailText = `${this.fileLoader.formatFileSize(info.size)} • ${new Date(info.modifiedDate).toLocaleString('pt-BR')}`;
+                try {
+                    const content = fm.readString(path);
+                    row.detailText = `${this.fileLoader.formatFileSize(content ? content.length : 0)}`;
+                } catch (e) {
+                    row.detailText = 'Arquivo indisponível';
+                }
                 selection.addRow(row);
             }
 
@@ -2094,17 +2014,3 @@ class Application {
         await alert.presentAlert();
     }
 })();
-
-// Export para uso em outros scripts
-module.exports = {
-    Application,
-    ScriptableFileLoader,
-    ImprovedScriptableUI,
-    ConfigManager,
-    AdvancedParser,
-    DetectorManager,
-    CorrelationEngine,
-    StatisticsEngine,
-    ScoreEngine,
-    ExportManager
-};
