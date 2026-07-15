@@ -1,5 +1,5 @@
 // ============================================
-// iOS EVIDENCE SCANNER - VERSÃO COMPLETA COM NDJSON E IPS
+// iOS EVIDENCE SCANNER - VERSÃO COMPLETA 2.2.0
 // ============================================
 
 // ============================================
@@ -10,7 +10,7 @@ class ConfigManager {
     constructor() {
         this.config = {
             appName: 'iOS Evidence Scanner',
-            version: '2.1.0',
+            version: '2.2.0',
             maxFileSize: 50 * 1024 * 1024,
             supportedExtensions: ['.plist', '.log', '.txt', '.json', '.ips', '.csv', '.xml', '.tracev3', '.ndjson', '.ndj', '.jsonl'],
             debug: false,
@@ -560,7 +560,506 @@ class ScriptableFileLoader {
 }
 
 // ============================================
-// 7. ADVANCED PARSER COM NDJSON E IPS
+// 7. MDM SETTINGS ANALYZER
+// ============================================
+
+class MDMSettingsAnalyzer {
+    constructor() {
+        this.patterns = {
+            ipv4: /\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b/g,
+            ipv6: /(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))/g,
+            domain: /\b([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b/g,
+            url: /https?:\/\/[^\s"'<>]+/g,
+            
+            vpn: ['vpn', 'tunnel', 'wireguard', 'openvpn', 'ikev2', 'l2tp', 'pptp', 'ipsec', 'packettunnel', 'networkextension'],
+            proxy: ['proxy', 'mitm', 'charles', 'burp', 'fiddler', 'proxyman', 'http catcher', 'surge', 'quantumult', 'shadowrocket'],
+            dns: ['dns', 'nameserver', 'resolv', '8.8.8.8', '1.1.1.1', '9.9.9.9'],
+            
+            suspicious: [
+                '3utools', 'altstore', 'trollstore', 'sidestore', 'scarlet', 'esign',
+                'cydia', 'sileo', 'zebra', 'procursus', 'ellekit', 
+                'frida', 'substrate', 'substitute', 'cycript',
+                'adguard', 'surge', 'quantumult', 'shadowrocket', 'potatso', 'loon'
+            ],
+            
+            mdmConfig: ['server', 'host', 'url', 'endpoint', 'certificate', 'cert', 'pem', 'crt', 'ca', 'identity', 'deviceid', 'udid', 'serial']
+        };
+        
+        // Domínios comuns para ignorar
+        this.commonDomains = [
+            'apple.com', 'icloud.com', 'icloud.com.br', 'icloud',
+            'google.com', 'googleapis.com', 'gstatic.com', 'google',
+            'facebook.com', 'twitter.com', 'instagram.com',
+            'localhost', 'example.com', 'test.com',
+            'apple-dns.net', 'apple.co', 'apple.com.cn',
+            'gmail.com', 'youtube.com', 'yahoo.com', 'bing.com',
+            'amazon.com', 'netflix.com', 'spotify.com'
+        ];
+    }
+
+    analyzePlist(obj, path = 'root', results = null) {
+        if (results === null) {
+            results = {
+                evidences: [],
+                network: { ips: [], domains: [], urls: [], vpnIndicators: [], proxyIndicators: [], dnsIndicators: [] },
+                suspicious: [],
+                mdmConfig: [],
+                systemInfo: { apps: [], identifiers: [], certificates: [] }
+            };
+        }
+
+        if (obj === null || obj === undefined) return results;
+
+        if (typeof obj === 'string') {
+            this.analyzeString(obj, path, results);
+            return results;
+        }
+
+        if (Array.isArray(obj)) {
+            for (let i = 0; i < obj.length; i++) {
+                this.analyzePlist(obj[i], `${path}[${i}]`, results);
+            }
+            return results;
+        }
+
+        if (typeof obj === 'object') {
+            for (const [key, value] of Object.entries(obj)) {
+                this.analyzeKey(key, value, path, results);
+                this.analyzePlist(value, `${path}.${key}`, results);
+            }
+        }
+
+        return results;
+    }
+
+    analyzeString(str, path, results) {
+        const lowerStr = str.toLowerCase();
+
+        // IPv4
+        const ipv4Matches = str.match(this.patterns.ipv4);
+        if (ipv4Matches) {
+            for (const ip of ipv4Matches) {
+                if (!this.isPrivateIP(ip) && !this.isReservedIP(ip)) {
+                    results.network.ips.push({
+                        ip: ip,
+                        path: path,
+                        type: 'IPv4',
+                        confidence: 'high',
+                        raw: str.substring(0, 100)
+                    });
+                }
+            }
+        }
+
+        // IPv6
+        const ipv6Matches = str.match(this.patterns.ipv6);
+        if (ipv6Matches) {
+            for (const ip of ipv6Matches) {
+                if (!this.isPrivateIP(ip)) {
+                    results.network.ips.push({
+                        ip: ip,
+                        path: path,
+                        type: 'IPv6',
+                        confidence: 'high',
+                        raw: str.substring(0, 100)
+                    });
+                }
+            }
+        }
+
+        // Domínios
+        const domainMatches = str.match(this.patterns.domain);
+        if (domainMatches) {
+            for (const domain of domainMatches) {
+                if (!this.isCommonDomain(domain) && domain.length > 3) {
+                    results.network.domains.push({
+                        domain: domain,
+                        path: path,
+                        confidence: 'medium',
+                        raw: str.substring(0, 100)
+                    });
+                }
+            }
+        }
+
+        // URLs
+        const urlMatches = str.match(this.patterns.url);
+        if (urlMatches) {
+            for (const url of urlMatches) {
+                results.network.urls.push({
+                    url: url,
+                    path: path,
+                    confidence: 'high',
+                    raw: str.substring(0, 100)
+                });
+            }
+        }
+
+        // VPN Indicators
+        for (const vpn of this.patterns.vpn) {
+            if (lowerStr.includes(vpn)) {
+                results.network.vpnIndicators.push({
+                    indicator: vpn,
+                    path: path,
+                    confidence: 'high',
+                    raw: str.substring(0, 100)
+                });
+            }
+        }
+
+        // Proxy Indicators
+        for (const proxy of this.patterns.proxy) {
+            if (lowerStr.includes(proxy)) {
+                results.network.proxyIndicators.push({
+                    indicator: proxy,
+                    path: path,
+                    confidence: 'high',
+                    raw: str.substring(0, 100)
+                });
+            }
+        }
+
+        // DNS Indicators
+        for (const dns of this.patterns.dns) {
+            if (lowerStr.includes(dns)) {
+                results.network.dnsIndicators.push({
+                    indicator: dns,
+                    path: path,
+                    confidence: 'medium',
+                    raw: str.substring(0, 100)
+                });
+            }
+        }
+
+        // Suspicious Tools
+        for (const tool of this.patterns.suspicious) {
+            if (lowerStr.includes(tool)) {
+                results.suspicious.push({
+                    tool: tool,
+                    path: path,
+                    confidence: 'critical',
+                    raw: str.substring(0, 100)
+                });
+            }
+        }
+    }
+
+    analyzeKey(key, value, path, results) {
+        const lowerKey = key.toLowerCase();
+
+        // Detects app bundle IDs
+        if (lowerKey.includes('com.') || lowerKey.includes('org.') || lowerKey.includes('net.')) {
+            if (key.length > 5 && key.length < 50) {
+                results.systemInfo.apps.push({
+                    bundleId: key,
+                    path: path,
+                    value: value,
+                    confidence: 'medium'
+                });
+            }
+        }
+
+        // Detects identifiers
+        if (lowerKey.includes('udid') || lowerKey.includes('serial') || 
+            lowerKey.includes('deviceid') || lowerKey.includes('identifier') ||
+            lowerKey.includes('uuid')) {
+            results.systemInfo.identifiers.push({
+                key: key,
+                value: value,
+                path: path,
+                confidence: 'medium'
+            });
+        }
+
+        // Detects certificate-related keys
+        if (lowerKey.includes('cert') || lowerKey.includes('trust') || 
+            lowerKey.includes('pem') || lowerKey.includes('crt') || lowerKey.includes('ca')) {
+            results.systemInfo.certificates.push({
+                key: key,
+                value: typeof value === 'string' ? value.substring(0, 50) : value,
+                path: path,
+                confidence: 'medium'
+            });
+        }
+
+        // Detects server/endpoint configurations
+        for (const config of this.patterns.mdmConfig) {
+            if (lowerKey.includes(config)) {
+                results.mdmConfig.push({
+                    key: key,
+                    value: typeof value === 'string' ? value.substring(0, 100) : value,
+                    path: path,
+                    type: config,
+                    confidence: 'medium'
+                });
+            }
+        }
+
+        // Detects suspicious keys
+        for (const tool of this.patterns.suspicious) {
+            if (lowerKey.includes(tool)) {
+                results.suspicious.push({
+                    tool: tool,
+                    path: path,
+                    confidence: 'critical',
+                    raw: `${key}: ${typeof value === 'string' ? value.substring(0, 50) : '...'}`
+                });
+            }
+        }
+    }
+
+    isPrivateIP(ip) {
+        if (!ip) return false;
+        const parts = ip.split('.').map(Number);
+        if (parts.length === 4 && !parts.some(isNaN)) {
+            if (parts[0] === 10) return true;
+            if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
+            if (parts[0] === 192 && parts[1] === 168) return true;
+            if (parts[0] === 127) return true;
+        }
+        return false;
+    }
+
+    isReservedIP(ip) {
+        if (!ip) return false;
+        const parts = ip.split('.').map(Number);
+        if (parts.length === 4 && !parts.some(isNaN)) {
+            if (parts[0] === 0) return true;
+            if (parts[0] === 224 && parts[1] >= 0 && parts[1] <= 239) return true;
+            if (parts[0] === 240 && parts[1] >= 0 && parts[1] <= 255) return true;
+            if (parts[0] === 255 && parts[1] === 255 && parts[2] === 255 && parts[3] === 255) return true;
+        }
+        return false;
+    }
+
+    isCommonDomain(domain) {
+        if (!domain) return true;
+        const d = domain.toLowerCase();
+        for (const common of this.commonDomains) {
+            if (d.includes(common) || common.includes(d)) return true;
+        }
+        if (d.endsWith('.local')) return true;
+        if (d.match(/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/)) return true;
+        return false;
+    }
+
+    generateReport(results) {
+        const report = {
+            summary: {
+                totalEvidences: 0,
+                ipsFound: results.network?.ips?.length || 0,
+                domainsFound: results.network?.domains?.length || 0,
+                urlsFound: results.network?.urls?.length || 0,
+                suspiciousTools: results.suspicious?.length || 0,
+                vpnIndicators: results.network?.vpnIndicators?.length || 0,
+                proxyIndicators: results.network?.proxyIndicators?.length || 0,
+                dnsIndicators: results.network?.dnsIndicators?.length || 0,
+                appsFound: results.systemInfo?.apps?.length || 0,
+                identifiersFound: results.systemInfo?.identifiers?.length || 0,
+                certificatesFound: results.systemInfo?.certificates?.length || 0
+            },
+            network: {
+                ips: results.network?.ips || [],
+                domains: results.network?.domains || [],
+                urls: results.network?.urls || [],
+                vpnIndicators: results.network?.vpnIndicators || [],
+                proxyIndicators: results.network?.proxyIndicators || [],
+                dnsIndicators: results.network?.dnsIndicators || []
+            },
+            suspicious: results.suspicious || [],
+            mdmConfig: results.mdmConfig || [],
+            systemInfo: {
+                apps: results.systemInfo?.apps || [],
+                identifiers: results.systemInfo?.identifiers || [],
+                certificates: results.systemInfo?.certificates || []
+            },
+            evidences: results.evidences || []
+        };
+        
+        report.summary.totalEvidences = 
+            report.network.ips.length +
+            report.network.domains.length +
+            report.network.urls.length +
+            report.suspicious.length +
+            report.network.vpnIndicators.length +
+            report.network.proxyIndicators.length +
+            report.network.dnsIndicators.length;
+        
+        return report;
+    }
+}
+
+// ============================================
+// 8. MDM PLIST DETECTOR
+// ============================================
+
+class MDMPlistsDetector extends BaseDetector {
+    constructor() {
+        super('MDM Plist Detector');
+        this.analyzer = new MDMSettingsAnalyzer();
+    }
+
+    detect(events) {
+        const results = [];
+        
+        for (const event of events) {
+            const sourceLower = (event.source || '').toLowerCase();
+            
+            // Verifica se é um plist relacionado a MDM ou configurações
+            if (sourceLower.includes('mcsettings') || 
+                sourceLower.includes('settings') ||
+                sourceLower.includes('configuration') ||
+                sourceLower.includes('profile') ||
+                (event.category === 'System' && event.type === 'plist')) {
+                
+                // Analisa os dados do evento
+                const analysis = this.analyzer.analyzePlist(event.data);
+                
+                // Ferramentas suspeitas
+                if (analysis.suspicious && analysis.suspicious.length > 0) {
+                    for (const susp of analysis.suspicious) {
+                        results.push(this.createResult(
+                            'Suspicious MDM Tool',
+                            {
+                                source: event.source,
+                                timestamp: event.timestamp,
+                                tool: susp.tool,
+                                path: susp.path,
+                                raw: susp.raw
+                            },
+                            susp.confidence || 'critical'
+                        ));
+                    }
+                }
+
+                // IPs
+                if (analysis.network && analysis.network.ips && analysis.network.ips.length > 0) {
+                    for (const ip of analysis.network.ips) {
+                        results.push(this.createResult(
+                            'Network IP Found',
+                            {
+                                source: event.source,
+                                timestamp: event.timestamp,
+                                ip: ip.ip,
+                                type: ip.type,
+                                path: ip.path,
+                                raw: ip.raw
+                            },
+                            ip.confidence || 'high'
+                        ));
+                    }
+                }
+
+                // Domínios
+                if (analysis.network && analysis.network.domains && analysis.network.domains.length > 0) {
+                    for (const domain of analysis.network.domains) {
+                        results.push(this.createResult(
+                            'Domain Found',
+                            {
+                                source: event.source,
+                                timestamp: event.timestamp,
+                                domain: domain.domain,
+                                path: domain.path,
+                                raw: domain.raw
+                            },
+                            domain.confidence || 'medium'
+                        ));
+                    }
+                }
+
+                // URLs
+                if (analysis.network && analysis.network.urls && analysis.network.urls.length > 0) {
+                    for (const url of analysis.network.urls) {
+                        results.push(this.createResult(
+                            'URL Found',
+                            {
+                                source: event.source,
+                                timestamp: event.timestamp,
+                                url: url.url,
+                                path: url.path,
+                                raw: url.raw
+                            },
+                            url.confidence || 'high'
+                        ));
+                    }
+                }
+
+                // VPN Indicators
+                if (analysis.network && analysis.network.vpnIndicators && analysis.network.vpnIndicators.length > 0) {
+                    for (const vpn of analysis.network.vpnIndicators) {
+                        results.push(this.createResult(
+                            'VPN Indicator',
+                            {
+                                source: event.source,
+                                timestamp: event.timestamp,
+                                indicator: vpn.indicator,
+                                path: vpn.path,
+                                raw: vpn.raw
+                            },
+                            vpn.confidence || 'high'
+                        ));
+                    }
+                }
+
+                // Proxy Indicators
+                if (analysis.network && analysis.network.proxyIndicators && analysis.network.proxyIndicators.length > 0) {
+                    for (const proxy of analysis.network.proxyIndicators) {
+                        results.push(this.createResult(
+                            'Proxy Indicator',
+                            {
+                                source: event.source,
+                                timestamp: event.timestamp,
+                                indicator: proxy.indicator,
+                                path: proxy.path,
+                                raw: proxy.raw
+                            },
+                            proxy.confidence || 'high'
+                        ));
+                    }
+                }
+
+                // DNS Indicators
+                if (analysis.network && analysis.network.dnsIndicators && analysis.network.dnsIndicators.length > 0) {
+                    for (const dns of analysis.network.dnsIndicators) {
+                        results.push(this.createResult(
+                            'DNS Indicator',
+                            {
+                                source: event.source,
+                                timestamp: event.timestamp,
+                                indicator: dns.indicator,
+                                path: dns.path,
+                                raw: dns.raw
+                            },
+                            dns.confidence || 'medium'
+                        ));
+                    }
+                }
+
+                // Certificates
+                if (analysis.systemInfo && analysis.systemInfo.certificates && analysis.systemInfo.certificates.length > 0) {
+                    for (const cert of analysis.systemInfo.certificates) {
+                        results.push(this.createResult(
+                            'Certificate Found',
+                            {
+                                source: event.source,
+                                timestamp: event.timestamp,
+                                key: cert.key,
+                                value: cert.value,
+                                path: cert.path
+                            },
+                            cert.confidence || 'medium'
+                        ));
+                    }
+                }
+            }
+        }
+
+        return results;
+    }
+}
+
+// ============================================
+// 9. ADVANCED PARSER
 // ============================================
 
 class AdvancedParser {
@@ -595,9 +1094,6 @@ class AdvancedParser {
         }
     }
 
-    // ============================================
-    // JSON PARSER
-    // ============================================
     parseJSON(file) {
         const events = [];
         try {
@@ -609,9 +1105,6 @@ class AdvancedParser {
         return events;
     }
 
-    // ============================================
-    // NDJSON PARSER (NOVO)
-    // ============================================
     parseNDJSON(file) {
         const events = [];
         const lines = file.content.split('\n').filter(line => line.trim());
@@ -621,8 +1114,6 @@ class AdvancedParser {
         for (let i = 0; i < lines.length; i++) {
             try {
                 const data = JSON.parse(lines[i]);
-                
-                // Extrai eventos da linha
                 const eventData = this.extractEventData(data);
                 if (eventData) {
                     events.push(new EventModel({
@@ -632,15 +1123,10 @@ class AdvancedParser {
                         type: eventData.type || 'ndjson_event',
                         description: eventData.description || this.generateDescription(data),
                         data: data,
-                        metadata: { 
-                            line: i + 1,
-                            path: `line_${i + 1}`,
-                            confidence: eventData.confidence || 'medium'
-                        },
+                        metadata: { line: i + 1, confidence: eventData.confidence || 'medium' },
                         raw: lines[i]
                     }));
                 } else {
-                    // Se não for um evento típico, cria um evento genérico
                     events.push(new EventModel({
                         timestamp: new Date(),
                         source: file.name,
@@ -653,178 +1139,28 @@ class AdvancedParser {
                     }));
                 }
             } catch (error) {
-                Logger.warn(`Erro ao parsear linha ${i + 1} do NDJSON: ${error.message}`);
-                // Tenta extrair informações mesmo com erro
+                Logger.warn(`Erro ao parsear linha ${i + 1}: ${error.message}`);
                 events.push(new EventModel({
                     timestamp: new Date(),
                     source: file.name,
                     category: 'NDJSON',
                     type: 'error',
-                    description: `Erro ao parsear linha ${i + 1}: ${error.message}`,
+                    description: `Erro na linha ${i + 1}: ${error.message}`,
                     data: { raw: lines[i] },
                     metadata: { line: i + 1, error: true },
                     raw: lines[i]
                 }));
             }
         }
-        
         return events;
     }
 
-    // ============================================
-    // IPS PARSER (CRASH REPORTS)
-    // ============================================
-    parseIPS(file) {
-        const events = [];
-        const content = file.content;
-        
-        Logger.info(`Analisando IPS Crash Report`);
-        
-        // Extrai cabeçalho do crash
-        const headerMatch = content.match(/(?:^|\n)([^\n]+?)(?:\n|$)/);
-        if (headerMatch) {
-            events.push(new EventModel({
-                timestamp: new Date(),
-                source: file.name,
-                category: 'Crash',
-                type: 'crash_header',
-                description: `Crash Report: ${headerMatch[1]}`,
-                data: { header: headerMatch[1] },
-                metadata: { confidence: 'high' }
-            }));
-        }
-
-        // Extrai data do crash
-        const dateMatch = content.match(/Date\/Time:\s*([^\n]+)/i);
-        if (dateMatch) {
-            const date = DateUtils.parseTimestamp(dateMatch[1]);
-            if (date) {
-                events.push(new EventModel({
-                    timestamp: date,
-                    source: file.name,
-                    category: 'Crash',
-                    type: 'crash_date',
-                    description: `Data do crash: ${dateMatch[1]}`,
-                    data: { date: dateMatch[1] },
-                    metadata: { confidence: 'high' }
-                }));
-            }
-        }
-
-        // Extrai aplicativo que crashou
-        const appMatch = content.match(/Application Name:\s*([^\n]+)/i) || content.match(/Process:\s*([^\n]+)/i);
-        if (appMatch) {
-            events.push(new EventModel({
-                timestamp: new Date(),
-                source: file.name,
-                category: 'Crash',
-                type: 'crash_app',
-                description: `Aplicativo: ${appMatch[1]}`,
-                data: { app: appMatch[1] },
-                metadata: { confidence: 'high' }
-            }));
-        }
-
-        // Extrai exceção
-        const exceptionMatch = content.match(/Exception Type:\s*([^\n]+)/i) || content.match(/Exception:\s*([^\n]+)/i);
-        if (exceptionMatch) {
-            events.push(new EventModel({
-                timestamp: new Date(),
-                source: file.name,
-                category: 'Crash',
-                type: 'crash_exception',
-                description: `Exceção: ${exceptionMatch[1]}`,
-                data: { exception: exceptionMatch[1] },
-                metadata: { confidence: 'high' }
-            }));
-        }
-
-        // Extrai stack trace
-        const stackMatch = content.match(/Thread [0-9]+[^\n]+\n([^]*?)(?:\n{2,}|$)/i);
-        if (stackMatch) {
-            const stackLines = stackMatch[1].split('\n').filter(line => line.trim());
-            if (stackLines.length > 0) {
-                events.push(new EventModel({
-                    timestamp: new Date(),
-                    source: file.name,
-                    category: 'Crash',
-                    type: 'crash_stack',
-                    description: `Stack Trace (${stackLines.length} linhas)`,
-                    data: { stack: stackLines.slice(0, 20) },
-                    metadata: { 
-                        confidence: 'high',
-                        stackLines: stackLines.length
-                    }
-                }));
-            }
-        }
-
-        // Extrai informação de jailbreak se presente
-        if (content.toLowerCase().includes('jailbreak') || 
-            content.toLowerCase().includes('cydia') || 
-            content.toLowerCase().includes('substrate')) {
-            events.push(new EventModel({
-                timestamp: new Date(),
-                source: file.name,
-                category: 'Jailbreak',
-                type: 'crash_jailbreak_indicator',
-                description: 'Indicador de jailbreak encontrado no crash report',
-                data: { indicator: 'Jailbreak detection in crash' },
-                metadata: { confidence: 'high' }
-            }));
-        }
-
-        // Extrai informação de tweaks/injeções
-        if (content.toLowerCase().includes('tweak') || 
-            content.toLowerCase().includes('inject') || 
-            content.toLowerCase().includes('hook') ||
-            content.toLowerCase().includes('frida')) {
-            events.push(new EventModel({
-                timestamp: new Date(),
-                source: file.name,
-                category: 'Hook',
-                type: 'crash_tweak_indicator',
-                description: 'Indicador de tweak/hook encontrado no crash report',
-                data: { indicator: 'Tweak/hook detection in crash' },
-                metadata: { confidence: 'high' }
-            }));
-        }
-
-        // Processa cada linha do IPS em busca de evidências
-        const lines = content.split('\n');
-        for (let i = 0; i < lines.length; i++) {
-            const line = lines[i];
-            if (!line.trim()) continue;
-            
-            // Procura por padrões suspeitos
-            const lowerLine = line.toLowerCase();
-            if (lowerLine.includes('proxy') || lowerLine.includes('mitm') || 
-                lowerLine.includes('charles') || lowerLine.includes('burp')) {
-                events.push(new EventModel({
-                    timestamp: new Date(),
-                    source: file.name,
-                    category: 'Proxy',
-                    type: 'proxy_evidence',
-                    description: `Evidência de proxy no crash: ${line.substring(0, 100)}`,
-                    data: { line: line },
-                    metadata: { 
-                        confidence: 'medium',
-                        line_number: i + 1
-                    }
-                }));
-            }
-        }
-
-        return events;
-    }
-
-    // ============================================
-    // PLIST PARSER
-    // ============================================
     parsePlist(file) {
         const events = [];
         try {
             const content = file.content;
+            
+            // Tenta parsear XML plist
             if (content.includes('<?xml') && content.includes('plist')) {
                 const matches = content.match(/<key>(.*?)<\/key>\s*<([a-z]+)>(.*?)<\/\2>/gs);
                 if (matches) {
@@ -842,6 +1178,18 @@ class AdvancedParser {
                         this.extractEventsFromJSON(data, file, events);
                     }
                 }
+            } else {
+                // Tenta parsear como binary plist (fallback)
+                events.push(new EventModel({
+                    timestamp: new Date(),
+                    source: file.name,
+                    category: 'System',
+                    type: 'plist_binary',
+                    description: 'Arquivo plist binário detectado',
+                    data: { raw: content.substring(0, 1000) },
+                    metadata: { confidence: 'low' },
+                    raw: content.substring(0, 500)
+                }));
             }
         } catch (error) {
             Logger.error(`Erro ao parsear plist: ${error.message}`);
@@ -860,9 +1208,150 @@ class AdvancedParser {
         }
     }
 
-    // ============================================
-    // LOG PARSER
-    // ============================================
+    parseIPS(file) {
+        const events = [];
+        const content = file.content;
+        
+        Logger.info(`Analisando IPS Crash Report`);
+        
+        // Cabeçalho
+        const headerMatch = content.match(/(?:^|\n)([^\n]+?)(?:\n|$)/);
+        if (headerMatch) {
+            events.push(new EventModel({
+                timestamp: new Date(),
+                source: file.name,
+                category: 'Crash',
+                type: 'crash_header',
+                description: `Crash Report: ${headerMatch[1]}`,
+                data: { header: headerMatch[1] },
+                metadata: { confidence: 'high' },
+                raw: headerMatch[0]
+            }));
+        }
+
+        // Data
+        const dateMatch = content.match(/Date\/Time:\s*([^\n]+)/i);
+        if (dateMatch) {
+            const date = DateUtils.parseTimestamp(dateMatch[1]);
+            if (date) {
+                events.push(new EventModel({
+                    timestamp: date,
+                    source: file.name,
+                    category: 'Crash',
+                    type: 'crash_date',
+                    description: `Data do crash: ${dateMatch[1]}`,
+                    data: { date: dateMatch[1] },
+                    metadata: { confidence: 'high' },
+                    raw: dateMatch[0]
+                }));
+            }
+        }
+
+        // Aplicativo
+        const appMatch = content.match(/Application Name:\s*([^\n]+)/i) || content.match(/Process:\s*([^\n]+)/i);
+        if (appMatch) {
+            events.push(new EventModel({
+                timestamp: new Date(),
+                source: file.name,
+                category: 'Crash',
+                type: 'crash_app',
+                description: `Aplicativo: ${appMatch[1]}`,
+                data: { app: appMatch[1] },
+                metadata: { confidence: 'high' },
+                raw: appMatch[0]
+            }));
+        }
+
+        // Exceção
+        const exceptionMatch = content.match(/Exception Type:\s*([^\n]+)/i) || content.match(/Exception:\s*([^\n]+)/i);
+        if (exceptionMatch) {
+            events.push(new EventModel({
+                timestamp: new Date(),
+                source: file.name,
+                category: 'Crash',
+                type: 'crash_exception',
+                description: `Exceção: ${exceptionMatch[1]}`,
+                data: { exception: exceptionMatch[1] },
+                metadata: { confidence: 'high' },
+                raw: exceptionMatch[0]
+            }));
+        }
+
+        // Stack Trace
+        const stackMatch = content.match(/Thread [0-9]+[^\n]+\n([^]*?)(?:\n{2,}|$)/i);
+        if (stackMatch) {
+            const stackLines = stackMatch[1].split('\n').filter(line => line.trim());
+            if (stackLines.length > 0) {
+                events.push(new EventModel({
+                    timestamp: new Date(),
+                    source: file.name,
+                    category: 'Crash',
+                    type: 'crash_stack',
+                    description: `Stack Trace (${stackLines.length} linhas)`,
+                    data: { stack: stackLines.slice(0, 20) },
+                    metadata: { confidence: 'high', stackLines: stackLines.length },
+                    raw: stackMatch[0]
+                }));
+            }
+        }
+
+        // Indicadores de jailbreak
+        if (content.toLowerCase().includes('jailbreak') || 
+            content.toLowerCase().includes('cydia') || 
+            content.toLowerCase().includes('substrate')) {
+            events.push(new EventModel({
+                timestamp: new Date(),
+                source: file.name,
+                category: 'Jailbreak',
+                type: 'crash_jailbreak_indicator',
+                description: 'Indicador de jailbreak no crash report',
+                data: { indicator: 'Jailbreak detection in crash' },
+                metadata: { confidence: 'high' },
+                raw: 'Jailbreak indicator found in crash report'
+            }));
+        }
+
+        // Indicadores de tweaks
+        if (content.toLowerCase().includes('tweak') || 
+            content.toLowerCase().includes('inject') || 
+            content.toLowerCase().includes('hook') ||
+            content.toLowerCase().includes('frida')) {
+            events.push(new EventModel({
+                timestamp: new Date(),
+                source: file.name,
+                category: 'Hook',
+                type: 'crash_tweak_indicator',
+                description: 'Indicador de tweak/hook no crash report',
+                data: { indicator: 'Tweak/hook detection in crash' },
+                metadata: { confidence: 'high' },
+                raw: 'Tweak/hook indicator found in crash report'
+            }));
+        }
+
+        // Evidências de proxy no crash
+        const lines = content.split('\n');
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            if (!line.trim()) continue;
+            const lowerLine = line.toLowerCase();
+            if (lowerLine.includes('proxy') || lowerLine.includes('mitm') || 
+                lowerLine.includes('charles') || lowerLine.includes('burp')) {
+                events.push(new EventModel({
+                    timestamp: new Date(),
+                    source: file.name,
+                    category: 'Proxy',
+                    type: 'proxy_evidence',
+                    description: `Evidência de proxy no crash: ${line.substring(0, 100)}`,
+                    data: { line: line },
+                    metadata: { confidence: 'medium', line_number: i + 1 },
+                    raw: line
+                }));
+            }
+        }
+
+        return events;
+    }
+
     parseLog(file) {
         const events = [];
         const lines = file.content.split('\n');
@@ -915,15 +1404,9 @@ class AdvancedParser {
         return Object.keys(result).length > 0 ? result : null;
     }
 
-    // ============================================
-    // TEXT PARSER
-    // ============================================
     parseText(file) { return this.parseLog(file); }
     parseXML(file) { return this.parseText(file); }
 
-    // ============================================
-    // CSV PARSER
-    // ============================================
     parseCSV(file) {
         const events = [];
         const lines = file.content.split('\n');
@@ -945,7 +1428,8 @@ class AdvancedParser {
                         type: eventData.type || 'row',
                         description: eventData.description || `Linha ${i}`,
                         data: data,
-                        metadata: { row: i }
+                        metadata: { row: i },
+                        raw: lines[i]
                     }));
                 }
             }
@@ -953,9 +1437,6 @@ class AdvancedParser {
         return events;
     }
 
-    // ============================================
-    // MÉTODOS AUXILIARES
-    // ============================================
     extractEventsFromJSON(obj, file, events, path = 'root') {
         if (typeof obj !== 'object' || obj === null) return;
 
@@ -1017,9 +1498,9 @@ class AdvancedParser {
         if (str.includes('crash') || str.includes('exception') || str.includes('panic')) return 'Crash';
         if (str.includes('frida') || str.includes('hook') || str.includes('inject') || str.includes('cycript')) return 'Hook';
         if (str.includes('altstore') || str.includes('trollstore') || str.includes('sideload')) return 'Sideload';
-        if (str.includes('frida') || str.includes('gadget') || str.includes('agent')) return 'Hook';
         if (str.includes('network') || str.includes('dns') || str.includes('http')) return 'Network';
         if (str.includes('analytics') || str.includes('diagnostic') || str.includes('sysdiagnose')) return 'Analytics';
+        if (str.includes('mdm') || str.includes('mcsettings') || str.includes('configuration')) return 'MDM';
         return 'System';
     }
 
@@ -1042,7 +1523,7 @@ class AdvancedParser {
 }
 
 // ============================================
-// 8. BASE DETECTOR
+// 10. BASE DETECTOR
 // ============================================
 
 class BaseDetector {
@@ -1070,7 +1551,7 @@ class BaseDetector {
 }
 
 // ============================================
-// 9. DETECTOR MANAGER
+// 11. DETECTOR MANAGER
 // ============================================
 
 class DetectorManager {
@@ -1106,10 +1587,9 @@ class DetectorManager {
 }
 
 // ============================================
-// 10. ADVANCED DETECTORS
+// 12. ADVANCED DETECTORS
 // ============================================
 
-// 10.1 ADVANCED PROXY DETECTOR
 class AdvancedProxyDetector extends BaseDetector {
     constructor() {
         super('Advanced Proxy Detector');
@@ -1180,22 +1660,6 @@ class AdvancedProxyDetector extends BaseDetector {
                 }
             }
 
-            if (event.category === 'Log' || event.type === 'log') {
-                if (str.includes('proxy') || str.includes('mitm') || str.includes('intercept')) {
-                    details.push(`Log com evidência de proxy`);
-                    found = true;
-                    proxyIndicators.push({ type: 'log', value: event.description, event: event });
-                }
-            }
-
-            if (event.type === 'crash_stack' || event.category === 'Crash') {
-                if (str.includes('proxy') || str.includes('mitm') || str.includes('charles')) {
-                    details.push(`Evidência de proxy no crash report`);
-                    found = true;
-                    proxyIndicators.push({ type: 'crash', value: 'Proxy evidence in crash', event: event });
-                }
-            }
-
             if (found && details.length > 0) {
                 results.push(this.createResult(
                     'Proxy Evidence',
@@ -1228,580 +1692,8 @@ class AdvancedProxyDetector extends BaseDetector {
     }
 }
 
-// 10.2 ADVANCED VPN DETECTOR
-class AdvancedVPNDetector extends BaseDetector {
-    constructor() {
-        super('Advanced VPN Detector');
-        this.patterns = {
-            apps: ['wireguard', 'openvpn', 'ikev2', 'l2tp', 'pptp', 'ipsec', 'vpn', 'tunnel'],
-            configFiles: ['vpn.conf', 'wg.conf', 'ovpn', 'openvpn.conf', 'ikev2.conf', 'vpn.config'],
-            bundleIds: ['com.wireguard', 'com.openvpn', 'com.apple.networkextension'],
-            processes: ['packettunnel', 'networkextension', 'vpn', 'wireguard', 'openvpn', 'iked', 'tunneld'],
-            networkPatterns: ['vpn', 'tunnel', 'encrypted tunnel', 'vpn connection', 'ppp', 'l2tp', 'ipsec', 'ikev2', 'wireguard', 'wg']
-        };
-    }
-
-    detect(events) {
-        const results = [];
-        let vpnIndicators = [];
-
-        for (const event of events) {
-            const str = JSON.stringify(event).toLowerCase();
-            let found = false;
-
-            for (const app of this.patterns.apps) {
-                if (str.includes(app.toLowerCase())) {
-                    results.push(this.createResult('VPN App', {
-                        source: event.source,
-                        timestamp: event.timestamp,
-                        app: app
-                    }, 'high'));
-                    found = true;
-                    vpnIndicators.push({ type: 'app', value: app });
-                }
-            }
-
-            for (const config of this.patterns.configFiles) {
-                if (str.includes(config.toLowerCase())) {
-                    results.push(this.createResult('VPN Config', {
-                        source: event.source,
-                        timestamp: event.timestamp,
-                        config: config
-                    }, 'high'));
-                    found = true;
-                    vpnIndicators.push({ type: 'config', value: config });
-                }
-            }
-
-            for (const process of this.patterns.processes) {
-                if (str.includes(process.toLowerCase())) {
-                    results.push(this.createResult('VPN Process', {
-                        source: event.source,
-                        timestamp: event.timestamp,
-                        process: process
-                    }, 'high'));
-                    found = true;
-                    vpnIndicators.push({ type: 'process', value: process });
-                }
-            }
-
-            if (event.category === 'Network' || event.type === 'network') {
-                for (const pattern of this.patterns.networkPatterns) {
-                    if (str.includes(pattern.toLowerCase())) {
-                        results.push(this.createResult('VPN Network', {
-                            source: event.source,
-                            timestamp: event.timestamp,
-                            pattern: pattern
-                        }, 'medium'));
-                        found = true;
-                        vpnIndicators.push({ type: 'network', value: pattern });
-                    }
-                }
-            }
-
-            if (str.includes('networkextension') || str.includes('packettunnel')) {
-                results.push(this.createResult('VPN NetworkExtension', {
-                    source: event.source,
-                    timestamp: event.timestamp,
-                    details: 'NetworkExtension detectado'
-                }, 'high'));
-                vpnIndicators.push({ type: 'ios_vpn', value: 'NetworkExtension' });
-            }
-        }
-
-        if (vpnIndicators.length >= 2) {
-            results.push({
-                detector: this.name,
-                type: 'Multiple VPN Indicators',
-                evidence: vpnIndicators,
-                confidence: 'high',
-                timestamp: new Date(),
-                explanation: `${vpnIndicators.length} indicadores de VPN detectados`
-            });
-        }
-
-        return results;
-    }
-}
-
-// 10.3 ADVANCED JAILBREAK DETECTOR
-class AdvancedJailbreakDetector extends BaseDetector {
-    constructor() {
-        super('Advanced Jailbreak Detector');
-        this.patterns = {
-            apps: ['cydia', 'sileo', 'zebra', 'procursus', 'ellekit', 'substitute', 'substrate'],
-            files: ['cydia.log', 'jailbreak.plist', 'procursus', 'substrate', 'mobile_substrate', '.cydia', '.sileo'],
-            bundleIds: ['com.saurik.cydia', 'org.coolstar.sileo', 'com.zebra', 'com.procursus'],
-            processes: ['jailbreakd', 'substituted', 'cydia', 'sileo', 'zebra', 'ellekit', 'jailbreak'],
-            paths: ['/var/jb/', '/jb/', '/.jailbreak', '/var/lib/cydia', '/Library/MobileSubstrate'],
-            systemFiles: ['/.cydia_', '/.sileo_', '/.procursus_', '/.zebra_'],
-            crashIndicators: ['jailbreak', 'cydia', 'sileo', 'substrate', 'substitute']
-        };
-    }
-
-    detect(events) {
-        const results = [];
-        let jbIndicators = [];
-
-        for (const event of events) {
-            const str = JSON.stringify(event).toLowerCase();
-            let found = false;
-
-            for (const app of this.patterns.apps) {
-                if (str.includes(app.toLowerCase())) {
-                    results.push(this.createResult('Jailbreak App', {
-                        source: event.source,
-                        timestamp: event.timestamp,
-                        app: app
-                    }, 'critical'));
-                    found = true;
-                    jbIndicators.push({ type: 'app', value: app });
-                }
-            }
-
-            for (const file of this.patterns.files) {
-                if (str.includes(file.toLowerCase())) {
-                    results.push(this.createResult('Jailbreak File', {
-                        source: event.source,
-                        timestamp: event.timestamp,
-                        file: file
-                    }, 'critical'));
-                    found = true;
-                    jbIndicators.push({ type: 'file', value: file });
-                }
-            }
-
-            for (const process of this.patterns.processes) {
-                if (str.includes(process.toLowerCase())) {
-                    results.push(this.createResult('Jailbreak Process', {
-                        source: event.source,
-                        timestamp: event.timestamp,
-                        process: process
-                    }, 'critical'));
-                    found = true;
-                    jbIndicators.push({ type: 'process', value: process });
-                }
-            }
-
-            for (const path of this.patterns.paths) {
-                if (str.includes(path.toLowerCase())) {
-                    results.push(this.createResult('Jailbreak Path', {
-                        source: event.source,
-                        timestamp: event.timestamp,
-                        path: path
-                    }, 'critical'));
-                    found = true;
-                    jbIndicators.push({ type: 'path', value: path });
-                }
-            }
-
-            for (const sysFile of this.patterns.systemFiles) {
-                if (str.includes(sysFile.toLowerCase())) {
-                    results.push(this.createResult('Jailbreak System File', {
-                        source: event.source,
-                        timestamp: event.timestamp,
-                        file: sysFile
-                    }, 'critical'));
-                    found = true;
-                    jbIndicators.push({ type: 'system_file', value: sysFile });
-                }
-            }
-
-            // Verifica em crash reports
-            if (event.type === 'crash_jailbreak_indicator') {
-                results.push(this.createResult('Jailbreak Crash Evidence', {
-                    source: event.source,
-                    timestamp: event.timestamp,
-                    details: event.description || 'Jailbreak evidence in crash'
-                }, 'critical'));
-                found = true;
-                jbIndicators.push({ type: 'crash_evidence', value: 'Jailbreak in crash' });
-            }
-
-            if (event.category === 'Crash' || event.type === 'crash') {
-                for (const indicator of this.patterns.crashIndicators) {
-                    if (str.includes(indicator.toLowerCase())) {
-                        results.push(this.createResult('Jailbreak Crash Indicator', {
-                            source: event.source,
-                            timestamp: event.timestamp,
-                            indicator: indicator
-                        }, 'high'));
-                        found = true;
-                        jbIndicators.push({ type: 'crash_indicator', value: indicator });
-                        break;
-                    }
-                }
-            }
-        }
-
-        if (jbIndicators.length >= 2) {
-            results.push({
-                detector: this.name,
-                type: 'Multiple Jailbreak Indicators',
-                evidence: jbIndicators,
-                confidence: 'critical',
-                timestamp: new Date(),
-                explanation: `${jbIndicators.length} indicadores de jailbreak detectados`
-            });
-        }
-
-        return results;
-    }
-}
-
-// 10.4 ADVANCED SIDELOAD DETECTOR
-class AdvancedSideloadDetector extends BaseDetector {
-    constructor() {
-        super('Advanced Sideload Detector');
-        this.patterns = {
-            apps: ['altstore', 'trollstore', 'sidestore', 'scarlet', 'esign', 'feather', 'sideloadly', 'appdb'],
-            files: ['altstore.plist', 'trollstore', 'provisioning', 'mobileprovision', '.app', '.ipa'],
-            bundleIds: ['com.altstore', 'com.opa334.trollstore', 'com.sidestore', 'com.appdb'],
-            processes: ['altstore', 'trollstore', 'sidestore', 'sideloadly', 'appdb'],
-            patterns: ['provisioning profile', 'adhoc', 'enterprise certificate', 'sideload', 'side-load', 'unsigned app']
-        };
-    }
-
-    detect(events) {
-        const results = [];
-        let sideloadIndicators = [];
-
-        for (const event of events) {
-            const str = JSON.stringify(event).toLowerCase();
-            let found = false;
-
-            for (const app of this.patterns.apps) {
-                if (str.includes(app.toLowerCase())) {
-                    results.push(this.createResult('Sideload App', {
-                        source: event.source,
-                        timestamp: event.timestamp,
-                        app: app
-                    }, 'high'));
-                    found = true;
-                    sideloadIndicators.push({ type: 'app', value: app });
-                }
-            }
-
-            for (const file of this.patterns.files) {
-                if (str.includes(file.toLowerCase())) {
-                    results.push(this.createResult('Sideload File', {
-                        source: event.source,
-                        timestamp: event.timestamp,
-                        file: file
-                    }, 'high'));
-                    found = true;
-                    sideloadIndicators.push({ type: 'file', value: file });
-                }
-            }
-
-            for (const pattern of this.patterns.patterns) {
-                if (str.includes(pattern.toLowerCase())) {
-                    results.push(this.createResult('Sideload Pattern', {
-                        source: event.source,
-                        timestamp: event.timestamp,
-                        pattern: pattern
-                    }, 'medium'));
-                    found = true;
-                    sideloadIndicators.push({ type: 'pattern', value: pattern });
-                }
-            }
-
-            // Verifica em arquivos NDJSON
-            if (event.category === 'NDJSON') {
-                if (str.includes('sideload') || str.includes('altstore') || str.includes('trollstore')) {
-                    results.push(this.createResult('Sideload NDJSON Evidence', {
-                        source: event.source,
-                        timestamp: event.timestamp,
-                        details: 'Evidência de sideload em NDJSON'
-                    }, 'high'));
-                    found = true;
-                    sideloadIndicators.push({ type: 'ndjson', value: 'Sideload evidence' });
-                }
-            }
-        }
-
-        if (sideloadIndicators.length >= 2) {
-            results.push({
-                detector: this.name,
-                type: 'Multiple Sideload Indicators',
-                evidence: sideloadIndicators,
-                confidence: 'high',
-                timestamp: new Date(),
-                explanation: `${sideloadIndicators.length} indicadores de sideload detectados`
-            });
-        }
-
-        return results;
-    }
-}
-
-// 10.5 ADVANCED HOOK DETECTOR
-class AdvancedHookDetector extends BaseDetector {
-    constructor() {
-        super('Advanced Hook Detector');
-        this.patterns = {
-            tools: ['frida', 'cycript', 'gdb', 'lldb', 'fishhook', 'substrate', 'substitute'],
-            files: ['frida.log', 'frida.json', '.frida', 'cycript.js', 'hook.log', 'tweak.log'],
-            processes: ['frida-server', 'frida-gadget', 'cycript', 'gdb', 'lldb', 'substituted'],
-            patterns: ['interpose', 'hook', 'inject', 'dylib injection', 'frida-agent', 'tweak', 'dylib'],
-            bundleIds: ['re.frida', 'com.frida', 'com.cycript']
-        };
-    }
-
-    detect(events) {
-        const results = [];
-
-        for (const event of events) {
-            const str = JSON.stringify(event).toLowerCase();
-            let found = false;
-
-            for (const tool of this.patterns.tools) {
-                if (str.includes(tool.toLowerCase())) {
-                    results.push(this.createResult('Hook Tool', {
-                        source: event.source,
-                        timestamp: event.timestamp,
-                        tool: tool
-                    }, 'critical'));
-                    found = true;
-                }
-            }
-
-            for (const file of this.patterns.files) {
-                if (str.includes(file.toLowerCase())) {
-                    results.push(this.createResult('Hook File', {
-                        source: event.source,
-                        timestamp: event.timestamp,
-                        file: file
-                    }, 'critical'));
-                    found = true;
-                }
-            }
-
-            for (const process of this.patterns.processes) {
-                if (str.includes(process.toLowerCase())) {
-                    results.push(this.createResult('Hook Process', {
-                        source: event.source,
-                        timestamp: event.timestamp,
-                        process: process
-                    }, 'critical'));
-                    found = true;
-                }
-            }
-
-            for (const pattern of this.patterns.patterns) {
-                if (str.includes(pattern.toLowerCase())) {
-                    results.push(this.createResult('Hook Pattern', {
-                        source: event.source,
-                        timestamp: event.timestamp,
-                        pattern: pattern
-                    }, 'high'));
-                    found = true;
-                }
-            }
-
-            // Verifica em crash reports
-            if (event.type === 'crash_tweak_indicator') {
-                results.push(this.createResult('Hook Crash Evidence', {
-                    source: event.source,
-                    timestamp: event.timestamp,
-                    details: 'Evidência de hook/tweak no crash'
-                }, 'critical'));
-                found = true;
-            }
-        }
-
-        return results;
-    }
-}
-
-// 10.6 ADVANCED FREE FIRE DETECTOR
-class AdvancedFreeFireDetector extends BaseDetector {
-    constructor() {
-        super('Advanced Free Fire Detector');
-        this.patterns = {
-            bundleIds: ['com.garena.game.ff', 'com.garena.game.freefire', 'com.garena.game.freefirebr', 'com.garena.ff'],
-            processes: ['freefire', 'garena', 'ff', 'com.garena'],
-            files: ['freefire.log', 'ff_', 'garena.log', 'ff.log'],
-            patterns: ['free fire', 'garena', 'ff', 'battle royale', 'ff_analytics', 'freefire_analytics'],
-            crashPatterns: ['freefire crash', 'ff crash', 'garena crash', 'freefire exception'],
-            analytics: ['freefire_analytics', 'ff_analytics', 'garena_analytics']
-        };
-    }
-
-    detect(events) {
-        const results = [];
-        let ffEvents = [];
-
-        for (const event of events) {
-            const str = JSON.stringify(event).toLowerCase();
-            let found = false;
-
-            for (const bundleId of this.patterns.bundleIds) {
-                if (str.includes(bundleId.toLowerCase())) {
-                    results.push(this.createResult('Free Fire Bundle', {
-                        source: event.source,
-                        timestamp: event.timestamp,
-                        bundleId: bundleId
-                    }, 'high'));
-                    found = true;
-                    ffEvents.push({ type: 'bundle', value: bundleId });
-                }
-            }
-
-            for (const process of this.patterns.processes) {
-                if (str.includes(process.toLowerCase())) {
-                    results.push(this.createResult('Free Fire Process', {
-                        source: event.source,
-                        timestamp: event.timestamp,
-                        process: process
-                    }, 'high'));
-                    found = true;
-                    ffEvents.push({ type: 'process', value: process });
-                }
-            }
-
-            for (const file of this.patterns.files) {
-                if (str.includes(file.toLowerCase())) {
-                    results.push(this.createResult('Free Fire File', {
-                        source: event.source,
-                        timestamp: event.timestamp,
-                        file: file
-                    }, 'medium'));
-                    found = true;
-                    ffEvents.push({ type: 'file', value: file });
-                }
-            }
-
-            for (const pattern of this.patterns.patterns) {
-                if (str.includes(pattern.toLowerCase())) {
-                    results.push(this.createResult('Free Fire Pattern', {
-                        source: event.source,
-                        timestamp: event.timestamp,
-                        pattern: pattern
-                    }, 'medium'));
-                    found = true;
-                    ffEvents.push({ type: 'pattern', value: pattern });
-                }
-            }
-
-            if (event.category === 'Crash' || event.type === 'crash') {
-                for (const crash of this.patterns.crashPatterns) {
-                    if (str.includes(crash.toLowerCase())) {
-                        results.push(this.createResult('Free Fire Crash', {
-                            source: event.source,
-                            timestamp: event.timestamp,
-                            crash: crash
-                        }, 'high'));
-                        found = true;
-                        ffEvents.push({ type: 'crash', value: crash });
-                    }
-                }
-            }
-
-            // Verifica em NDJSON
-            if (event.category === 'NDJSON' && str.includes('freefire')) {
-                results.push(this.createResult('Free Fire NDJSON Evidence', {
-                    source: event.source,
-                    timestamp: event.timestamp,
-                    details: 'Evidência do Free Fire em NDJSON'
-                }, 'medium'));
-                found = true;
-                ffEvents.push({ type: 'ndjson', value: 'Free Fire evidence' });
-            }
-        }
-
-        if (ffEvents.length >= 3) {
-            results.push({
-                detector: this.name,
-                type: 'Multiple Free Fire Activities',
-                evidence: ffEvents,
-                confidence: 'high',
-                timestamp: new Date(),
-                explanation: `${ffEvents.length} eventos relacionados ao Free Fire detectados`
-            });
-        }
-
-        return results;
-    }
-}
-
-// 10.7 ADVANCED CERTIFICATE DETECTOR
-class AdvancedCertificateDetector extends BaseDetector {
-    constructor() {
-        super('Advanced Certificate Detector');
-        this.patterns = {
-            types: ['certificate', 'trust', 'ssl', 'tls', 'ca', 'root ca', 'cert'],
-            mitmCerts: ['portswigger ca', 'charles ca', 'burp ca', 'mitmproxy ca', 'proxyman ca', 'fiddler ca'],
-            enterpriseCerts: ['enterprise certificate', 'in-house certificate', 'distribution certificate', 'enterprise app'],
-            files: ['certificate.pem', 'certificate.crt', 'truststore', 'ca.crt', '.crt', '.pem'],
-            patterns: ['self-signed', 'certificate pinning', 'ssl inspection', 'ssl bypass', 'cert bypass']
-        };
-    }
-
-    detect(events) {
-        const results = [];
-
-        for (const event of events) {
-            const str = JSON.stringify(event).toLowerCase();
-
-            for (const cert of this.patterns.mitmCerts) {
-                if (str.includes(cert.toLowerCase())) {
-                    results.push(this.createResult('MITM Certificate', {
-                        source: event.source,
-                        timestamp: event.timestamp,
-                        certificate: cert
-                    }, 'critical'));
-                }
-            }
-
-            for (const cert of this.patterns.enterpriseCerts) {
-                if (str.includes(cert.toLowerCase())) {
-                    results.push(this.createResult('Enterprise Certificate', {
-                        source: event.source,
-                        timestamp: event.timestamp,
-                        certificate: cert
-                    }, 'high'));
-                }
-            }
-
-            for (const file of this.patterns.files) {
-                if (str.includes(file.toLowerCase())) {
-                    results.push(this.createResult('Certificate File', {
-                        source: event.source,
-                        timestamp: event.timestamp,
-                        file: file
-                    }, 'medium'));
-                }
-            }
-
-            if (event.category === 'Network' || event.type === 'network') {
-                for (const pattern of this.patterns.patterns) {
-                    if (str.includes(pattern.toLowerCase())) {
-                        results.push(this.createResult('SSL Pattern', {
-                            source: event.source,
-                            timestamp: event.timestamp,
-                            pattern: pattern
-                        }, 'medium'));
-                    }
-                }
-            }
-
-            // Verifica em NDJSON
-            if (event.category === 'NDJSON' && (str.includes('certificate') || str.includes('ssl'))) {
-                results.push(this.createResult('Certificate NDJSON Evidence', {
-                    source: event.source,
-                    timestamp: event.timestamp,
-                    details: 'Evidência de certificado em NDJSON'
-                }, 'medium'));
-            }
-        }
-
-        return results;
-    }
-}
-
 // ============================================
-// 11. ENHANCED CORRELATION ENGINE
+// 13. ENHANCED CORRELATION ENGINE
 // ============================================
 
 class EnhancedCorrelationEngine {
@@ -1813,7 +1705,8 @@ class EnhancedCorrelationEngine {
             this.correlateVPNAndNetwork.bind(this),
             this.correlateTiming.bind(this),
             this.correlateCrashPatterns.bind(this),
-            this.correlateNDJSONEvidence.bind(this)
+            this.correlateNDJSONEvidence.bind(this),
+            this.correlateMDMAndSuspicious.bind(this)
         ];
     }
 
@@ -2000,6 +1893,31 @@ class EnhancedCorrelationEngine {
         return correlations;
     }
 
+    correlateMDMAndSuspicious(events) {
+        const correlations = [];
+        const mdmEvents = events.filter(e => e.category === 'MDM' || e.type === 'Suspicious MDM Tool');
+        const suspiciousEvents = events.filter(e => 
+            e.category === 'Jailbreak' || e.category === 'Sideload' || e.category === 'Hook'
+        );
+
+        for (const mdm of mdmEvents) {
+            for (const susp of suspiciousEvents) {
+                if (this.isTimeClose(mdm.timestamp, susp.timestamp, 10)) {
+                    correlations.push({
+                        id: `corr_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+                        type: 'mdm_suspicious_tool',
+                        description: `Configuração MDM com ferramenta suspeita (${susp.category})`,
+                        confidence: 'high',
+                        events: [mdm, susp],
+                        timestamp: mdm.timestamp,
+                        explanation: `Arquivo de configuração MDM contém evidência de ${susp.category}`
+                    });
+                }
+            }
+        }
+        return correlations;
+    }
+
     isTimeClose(date1, date2, minutes) {
         if (!date1 || !date2) return false;
         const diff = Math.abs(date1.getTime() - date2.getTime());
@@ -2008,7 +1926,7 @@ class EnhancedCorrelationEngine {
 }
 
 // ============================================
-// 12. STATISTICS ENGINE
+// 14. STATISTICS ENGINE
 // ============================================
 
 class StatisticsEngine {
@@ -2066,7 +1984,7 @@ class StatisticsEngine {
 }
 
 // ============================================
-// 13. SCORE ENGINE
+// 15. SCORE ENGINE
 // ============================================
 
 class ScoreEngine {
@@ -2084,7 +2002,8 @@ class ScoreEngine {
             appstore: 0.8,
             crash: 1.0,
             analytics: 0.5,
-            ndjson: 0.7
+            ndjson: 0.7,
+            mdm: 0.6
         };
         this.thresholds = { low: 50, medium: 100, high: 200, critical: 300 };
     }
@@ -2164,8 +2083,8 @@ class ScoreEngine {
             recommendations.push('🔐 Verificar certificados instalados');
         }
         
-        if (score.byCategory?.ndjson) {
-            recommendations.push('📊 Analisar dados estruturados (NDJSON)');
+        if (score.byCategory?.mdm) {
+            recommendations.push('📋 Revisar configurações MDM e ferramentas de gerenciamento');
         }
         
         return recommendations;
@@ -2173,7 +2092,7 @@ class ScoreEngine {
 }
 
 // ============================================
-// 14. EVIDENCE CLASS
+// 16. EVIDENCE CLASS
 // ============================================
 
 class Evidence {
@@ -2227,7 +2146,7 @@ class EvidenceCollection {
 }
 
 // ============================================
-// 15. ENHANCED TIMELINE BUILDER
+// 17. ENHANCED TIMELINE BUILDER
 // ============================================
 
 class EnhancedTimelineBuilder {
@@ -2306,7 +2225,7 @@ class EnhancedTimelineBuilder {
 }
 
 // ============================================
-// 16. EXPORT MANAGER
+// 18. EXPORT MANAGER
 // ============================================
 
 class ExportManager {
@@ -2329,9 +2248,130 @@ class ExportManager {
     }
 
     exportToHTML(report) {
-        // Mantido igual ao anterior por questões de espaço
-        // Mas você pode copiar o HTML completo da versão anterior
-        return this.exportToText(report);
+        return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>iOS Evidence Scanner - Relatório</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; color: #333; padding: 20px; }
+.container { max-width: 1200px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+.header { border-bottom: 3px solid #007aff; padding-bottom: 20px; margin-bottom: 30px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; }
+.header h1 { color: #007aff; font-size: 28px; }
+.header .meta { color: #666; font-size: 14px; }
+.score-section { background: linear-gradient(135deg, #007aff, #0051d5); color: white; padding: 20px; border-radius: 8px; margin-bottom: 30px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; }
+.score-number { font-size: 48px; font-weight: bold; }
+.risk-level { padding: 10px 20px; border-radius: 20px; background: rgba(255,255,255,0.2); font-weight: bold; }
+.risk-critical { background: #ff3b30; }
+.risk-high { background: #ff9500; }
+.risk-medium { background: #ffcc00; color: #000; }
+.risk-low { background: #34c759; }
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin-bottom: 30px; }
+.stat-box { background: #f8f9fa; padding: 15px; border-radius: 8px; text-align: center; }
+.stat-box .number { font-size: 24px; font-weight: bold; color: #007aff; }
+.stat-box .label { color: #666; font-size: 12px; margin-top: 5px; }
+.section { margin-top: 30px; border-top: 1px solid #e5e5e5; padding-top: 20px; }
+.section h2 { color: #333; margin-bottom: 15px; }
+.detection-item { background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 10px; border-left: 4px solid #007aff; }
+.detection-item .type { font-weight: bold; color: #007aff; }
+.detection-item .confidence { float: right; padding: 2px 10px; border-radius: 10px; font-size: 12px; font-weight: bold; }
+.confidence-critical { background: #ff3b30; color: white; }
+.confidence-high { background: #ff9500; color: white; }
+.confidence-medium { background: #ffcc00; color: #000; }
+.confidence-low { background: #34c759; color: white; }
+.detection-item .details { margin-top: 5px; color: #666; font-size: 13px; }
+.correlation-item { background: #f0f7ff; padding: 15px; border-radius: 8px; margin-bottom: 10px; border-left: 4px solid #ff9500; }
+.correlation-item .type { font-weight: bold; color: #ff9500; }
+.timeline-item { padding: 10px; border-bottom: 1px solid #eee; }
+.timeline-item .time { color: #666; font-size: 14px; font-weight: bold; }
+.timeline-item .desc { color: #333; margin-top: 3px; }
+.recommendations { background: #f0f7ff; padding: 15px; border-radius: 8px; margin-top: 20px; }
+.recommendations ul { padding-left: 20px; margin-top: 10px; }
+.recommendations li { margin: 5px 0; }
+</style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <div>
+            <h1>🔍 ${report.appName || 'iOS Evidence Scanner'}</h1>
+            <div class="meta">Versão: ${report.version || '1.0.0'} • ${new Date(report.generated).toLocaleString('pt-BR')}</div>
+        </div>
+        <div style="font-size:14px;color:#666;">
+            Eventos: ${report.totalEvents} • Detecções: ${report.totalDetections}
+        </div>
+    </div>
+    
+    <div class="score-section">
+        <div>
+            <div class="score-number">${report.score}</div>
+            <div style="font-size:14px;opacity:0.8;">Score de Evidências</div>
+        </div>
+        <div>
+            <div class="risk-level risk-${report.riskLevel}">${report.riskLevel.toUpperCase()}</div>
+        </div>
+    </div>
+    
+    <div class="stats-grid">
+        <div class="stat-box"><div class="number">${Object.keys(report.statistics?.categories || {}).length}</div><div class="label">Categorias</div></div>
+        <div class="stat-box"><div class="number">${report.statistics?.uniqueSourcesCount || 0}</div><div class="label">Fontes</div></div>
+        <div class="stat-box"><div class="number">${report.statistics?.confidence?.critical || 0}</div><div class="label">Crítico</div></div>
+        <div class="stat-box"><div class="number">${report.statistics?.confidence?.high || 0}</div><div class="label">Alta Confiança</div></div>
+        <div class="stat-box"><div class="number">${report.totalCorrelations || 0}</div><div class="label">Correlações</div></div>
+        <div class="stat-box"><div class="number">${report.totalEvidences || 0}</div><div class="label">Evidências</div></div>
+    </div>
+
+    ${report.detections && report.detections.length > 0 ? `
+    <div class="section">
+        <h2>🔎 Detecções (${report.detections.length})</h2>
+        ${report.detections.slice(0, 100).map(d => `
+            <div class="detection-item">
+                <div>
+                    <span class="type">${d.type || 'Detecção'}</span>
+                    <span class="confidence confidence-${d.confidence || 'low'}">${(d.confidence || 'low').toUpperCase()}</span>
+                </div>
+                <div style="margin-top:5px;color:#666;font-size:14px;">${d.detector || 'Unknown'}</div>
+                <div style="margin-top:5px;color:#888;font-size:13px;">${d.explanation || ''}</div>
+                ${d.details ? `<div class="details">${d.details}</div>` : ''}
+                ${d.evidence?.source ? `<div class="details">📁 ${d.evidence.source}</div>` : ''}
+                ${d.timestamp ? `<div class="details">🕐 ${new Date(d.timestamp).toLocaleString('pt-BR')}</div>` : ''}
+            </div>
+        `).join('')}
+        ${report.detections.length > 100 ? `<div style="color:#999;padding:10px;">... e mais ${report.detections.length - 100} detecções</div>` : ''}
+    </div>` : ''}
+
+    ${report.correlations && report.correlations.length > 0 ? `
+    <div class="section">
+        <h2>🔗 Correlações (${report.correlations.length})</h2>
+        ${report.correlations.slice(0, 30).map(c => `
+            <div class="correlation-item">
+                <div>
+                    <span class="type">${c.type || 'Correlação'}</span>
+                    <span style="float:right;font-size:12px;color:#666;">${c.confidence || 'medium'}</span>
+                </div>
+                <div style="margin-top:5px;color:#666;font-size:14px;">${c.description || ''}</div>
+                ${c.explanation ? `<div style="margin-top:3px;color:#888;font-size:12px;">${c.explanation}</div>` : ''}
+                <div style="margin-top:3px;color:#999;font-size:12px;">${c.events ? `${c.events.length} evento(s) relacionados` : ''}</div>
+            </div>
+        `).join('')}
+    </div>` : ''}
+
+    ${report.recommendations && report.recommendations.length > 0 ? `
+    <div class="section">
+        <div class="recommendations">
+            <h2>💡 Recomendações</h2>
+            <ul>${report.recommendations.map(r => `<li>${r}</li>`).join('')}</ul>
+        </div>
+    </div>` : ''}
+
+    <div style="text-align:center;color:#999;padding:30px 0 10px;font-size:12px;border-top:1px solid #eee;margin-top:30px;">
+        ${report.appName || 'iOS Evidence Scanner'} - Análise baseada exclusivamente em evidências nos arquivos
+    </div>
+</div>
+</body>
+</html>`;
     }
 
     exportToText(report) {
@@ -2393,7 +2433,7 @@ class ExportManager {
 }
 
 // ============================================
-// 17. UI - CORRIGIDA
+// 19. UI - CORRIGIDA
 // ============================================
 
 class ImprovedScriptableUI {
@@ -2409,7 +2449,7 @@ class ImprovedScriptableUI {
     async showMainMenu() {
         const alert = new Alert();
         alert.title = '🔍 iOS Evidence Scanner';
-        alert.message = `v${this.scanner?.configManager?.get('version') || '2.1.0'}\n\nScanner forense para análise de evidências em arquivos iOS\n\nBaseado exclusivamente em evidências reais\n\n📁 Suporte: JSON, NDJSON, IPS, PLIST, LOG, CSV, XML\n🔎 Detectores: Proxy, VPN, Jailbreak, Sideload, Hook, Free Fire, Certificados`;
+        alert.message = `v${this.scanner?.configManager?.get('version') || '2.2.0'}\n\nScanner forense para análise de evidências em arquivos iOS\n\n📁 Suporte: JSON, NDJSON, IPS, PLIST, LOG, CSV, XML\n🔎 Detectores: Proxy, VPN, Jailbreak, Sideload, Hook, Free Fire, Certificados, MDM`;
         alert.addAction('🔍 Nova Análise');
         alert.addAction('📊 Histórico');
         alert.addAction('⚙️ Configurações');
@@ -2616,7 +2656,7 @@ class ImprovedScriptableUI {
             </head>
             <body>
             <div class="container">
-                <h1>📖 Guia do iOS Evidence Scanner v2.1</h1>
+                <h1>📖 Guia do iOS Evidence Scanner v2.2</h1>
                 
                 <h2>🔍 O que faz?</h2>
                 <p>Analisa arquivos do sistema iOS em busca de evidências técnicas.</p>
@@ -2644,6 +2684,7 @@ class ImprovedScriptableUI {
                     <div class="detector-item">🎮 Free Fire</div>
                     <div class="detector-item">🔐 Certificados</div>
                     <div class="detector-item">💥 Crash Reports</div>
+                    <div class="detector-item">📋 MDM Config</div>
                 </div>
                 
                 <h2>📁 Como usar?</h2>
@@ -2690,7 +2731,7 @@ class ImprovedScriptableUI {
 }
 
 // ============================================
-// 18. APPLICATION PRINCIPAL
+// 20. APPLICATION PRINCIPAL
 // ============================================
 
 class Application {
@@ -2724,6 +2765,7 @@ class Application {
         this.detectorManager.register(new AdvancedHookDetector());
         this.detectorManager.register(new AdvancedFreeFireDetector());
         this.detectorManager.register(new AdvancedCertificateDetector());
+        this.detectorManager.register(new MDMPlistsDetector());
     }
 
     async run() {
@@ -2777,7 +2819,6 @@ class Application {
             const totalFiles = files.length;
             let processedFiles = 0;
 
-            // Parser
             for (const file of files) {
                 await this.ui.showProgress(
                     processedFiles,
@@ -2807,7 +2848,6 @@ class Application {
                 processedFiles++;
             }
 
-            // Detectores
             await this.ui.showProgress(1, 1, '🔎 Executando detectores...', 
                 `${this.detectorManager.getDetectorCount()} detectores ativos`);
             
@@ -2828,28 +2868,17 @@ class Application {
                 this.evidenceCollection.add(evidence);
             }
 
-            // Correlação
             await this.ui.showProgress(1, 1, '🔗 Correlacionando eventos...', 
                 `${this.events.length} eventos processados`);
             
             this.correlations = this.correlationEngine.correlate(this.events);
 
-            // Score
             const score = this.scoreEngine.calculate(this.evidenceCollection.getAll());
-
-            // Estatísticas
-            const stats = this.statisticsEngine.analyze(
-                this.events,
-                this.detections,
-                this.correlations
-            );
-
-            // Timeline
+            const stats = this.statisticsEngine.analyze(this.events, this.detections, this.correlations);
             const timeline = this.timelineBuilder.build(this.events);
 
             this.endTime = Date.now();
 
-            // Relatório
             const report = {
                 appName: this.configManager.get('appName'),
                 version: this.configManager.get('version'),
@@ -2876,10 +2905,8 @@ class Application {
                 }
             };
 
-            // Mostrar relatório
             await this.ui.showReport(report);
 
-            // Perguntar exportação
             const exportAlert = new Alert();
             exportAlert.title = '📥 Exportar Relatório';
             exportAlert.message = 'Deseja exportar o relatório em múltiplos formatos?';
@@ -2890,7 +2917,6 @@ class Application {
                 await this.exportReport(report);
             }
 
-            // Estatísticas
             const statsData = {
                 totalEvents: this.events.length,
                 totalDetections: this.detections.length,
@@ -3021,7 +3047,7 @@ class Application {
 }
 
 // ============================================
-// 19. PONTO DE ENTRADA
+// 21. PONTO DE ENTRADA
 // ============================================
 
 (async () => {
