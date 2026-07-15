@@ -5,7 +5,6 @@
 // ============================================
 // 1. CONFIGURATION MANAGER
 // ============================================
-
 class ConfigManager {
     constructor() {
         this.config = {
@@ -190,7 +189,7 @@ class CacheManager {
 }
 
 // ============================================
-// 6. SCRIPTABLE FILE LOADER (CORRIGIDO)
+// 6. SCRIPTABLE FILE LOADER
 // ============================================
 
 class ScriptableFileLoader {
@@ -203,15 +202,10 @@ class ScriptableFileLoader {
         this.fileInfo = [];
     }
 
-    /**
-     * Método principal para selecionar arquivos usando DocumentPicker
-     * FUNCIONA NO IPHONE
-     */
     async selectFiles(allowMultiple = true) {
         try {
             Logger.info('Abrindo seletor de arquivos...');
             
-            // Usa DocumentPicker - FUNCIONA NO IPHONE
             const documentPicker = new DocumentPicker();
             documentPicker.types = ['public.data', 'public.content', 'public.text'];
             documentPicker.allowsMultipleSelection = allowMultiple;
@@ -224,7 +218,6 @@ class ScriptableFileLoader {
 
             Logger.info(`${selected.length} arquivo(s) selecionado(s)`);
             
-            // Carrega cada arquivo selecionado
             const loadedFiles = [];
             for (const file of selected) {
                 try {
@@ -246,20 +239,15 @@ class ScriptableFileLoader {
 
         } catch (error) {
             Logger.error(`Erro na seleção: ${error.message}`);
-            // Fallback para iCloud se DocumentPicker falhar
             return await this.selectFilesFromiCloud(allowMultiple);
         }
     }
 
-    /**
-     * Fallback para seleção via iCloud Drive (caso DocumentPicker falhe)
-     */
     async selectFilesFromiCloud(allowMultiple = true) {
         try {
             const fm = FileManager.iCloud();
             const docs = fm.documentsDirectory();
             
-            // Lista arquivos na pasta do Scriptable
             const items = fm.listContents(docs);
             const supportedItems = items.filter(item => {
                 const ext = this.getFileExtension(item);
@@ -275,7 +263,6 @@ class ScriptableFileLoader {
                 return [];
             }
 
-            // Cria tabela de seleção
             const selection = new UITable();
             selection.title = '📂 Selecione o(s) arquivo(s) para análise';
             
@@ -357,17 +344,14 @@ class ScriptableFileLoader {
                 return [];
             });
 
-            // Apresenta a tabela
             await selection.present();
 
-            // Aguarda o resultado
             let attempts = 0;
             while (result === null && attempts < 30) {
                 await new Promise(resolve => setTimeout(resolve, 100));
                 attempts++;
             }
 
-            // Se ainda não tiver resultado, verifica selectedRows
             if (!result || result.length === 0) {
                 const selectedRows = selection.selectedRows;
                 if (selectedRows && selectedRows.length > 0) {
@@ -403,15 +387,11 @@ class ScriptableFileLoader {
         }
     }
 
-    /**
-     * Carrega um arquivo individual
-     */
     async loadFile(file) {
         try {
             const fm = FileManager.iCloud();
             let loadedFile = null;
 
-            // Caso 1: Caminho do arquivo
             if (typeof file === 'string') {
                 const path = file;
                 const content = fm.readString(path);
@@ -426,9 +406,7 @@ class ScriptableFileLoader {
                     content: content,
                     type: this.detectFileType(path)
                 };
-            }
-            // Caso 2: Objeto File do DocumentPicker
-            else if (file.path) {
+            } else if (file.path) {
                 const path = file.path;
                 const content = fm.readString(path);
                 if (!content) throw new Error(`Arquivo vazio: ${path}`);
@@ -442,9 +420,7 @@ class ScriptableFileLoader {
                     content: content,
                     type: this.detectFileType(file.name || path)
                 };
-            }
-            // Caso 3: Objeto com conteúdo
-            else if (file.content) {
+            } else if (file.content) {
                 loadedFile = {
                     name: file.name || 'arquivo',
                     path: file.path || '',
@@ -458,13 +434,11 @@ class ScriptableFileLoader {
                 throw new Error('Formato de arquivo não suportado');
             }
 
-            // Valida o arquivo
             const validation = this.validateFile(loadedFile);
             if (!validation.valid) {
                 throw new Error(validation.error);
             }
 
-            // Adiciona ao cache
             if (this.configManager.get('cacheEnabled')) {
                 this.cacheManager.set(loadedFile.path || loadedFile.name, loadedFile);
             }
@@ -479,9 +453,6 @@ class ScriptableFileLoader {
         }
     }
 
-    /**
-     * Valida o arquivo
-     */
     validateFile(file) {
         if (!file) return { valid: false, error: 'Arquivo inválido' };
         if (!file.name && !file.path) return { valid: false, error: 'Nome do arquivo não especificado' };
@@ -507,9 +478,6 @@ class ScriptableFileLoader {
         return { valid: true };
     }
 
-    /**
-     * Detecta o tipo do arquivo
-     */
     detectFileType(filename) {
         const ext = this.getFileExtension(filename);
         const typeMap = {
@@ -1386,7 +1354,7 @@ class ExportManager {
 <title>iOS Evidence Scanner - Relatório</title>
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
-body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; color: #333; padding: 20px; }
+body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #f5f5f5; color: #333; padding: 20px; }
 .container { max-width: 1200px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
 .header { border-bottom: 3px solid #007aff; padding-bottom: 20px; margin-bottom: 30px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; }
 .header h1 { color: #007aff; font-size: 28px; }
@@ -1505,7 +1473,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 }
 
 // ============================================
-// 17. IMPROVED SCRIPTABLE UI (CORRIGIDO)
+// 17. IMPROVED SCRIPTABLE UI
 // ============================================
 
 class ImprovedScriptableUI {
@@ -1536,7 +1504,6 @@ class ImprovedScriptableUI {
                 throw new Error('FileLoader não disponível');
             }
             
-            // Abre o seletor de arquivos - FUNCIONA NO IPHONE
             const files = await this.scanner.fileLoader.selectFiles(true);
             
             if (!files || files.length === 0) {
@@ -1778,19 +1745,16 @@ class Application {
 
     async runAnalysis() {
         try {
-            // 1. Selecionar arquivos
             const files = await this.ui.selectFiles();
             if (!files || files.length === 0) {
                 throw new Error('Nenhum arquivo selecionado');
             }
 
-            // 2. Confirmar seleção
             const confirmed = await this.ui.showFileInfo(files);
             if (!confirmed) {
                 throw new Error('Seleção cancelada pelo usuário');
             }
 
-            // 3. Analisar
             this.startTime = Date.now();
             this.events = [];
             this.detections = [];
@@ -2040,17 +2004,3 @@ class Application {
         await alert.presentAlert();
     }
 })();
-
-// Export para uso em outros scripts
-module.exports = {
-    Application,
-    ScriptableFileLoader,
-    ImprovedScriptableUI,
-    ConfigManager,
-    AdvancedParser,
-    DetectorManager,
-    CorrelationEngine,
-    StatisticsEngine,
-    ScoreEngine,
-    ExportManager
-};
